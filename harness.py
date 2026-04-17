@@ -28,22 +28,26 @@ Your available tools:
 - execute_python: Write and run Python code
 - write_file: Save text files to /workspace
 - read_file: Read files from /workspace
-- http_request: Perform HTTP GET/POST requests. Large responses are saved to file and a summary is returned.
-- grep_file: Search for patterns in files (like grep) to extract specific information from large responses.
+- http_request: Perform HTTP GET/POST requests. Large response bodies are saved to file and a summary is returned.
+- grep_file: Search for regex patterns inside a file, returning matching lines with line numbers.
 - read_file_range: Read a specific range of lines from a file.
-- list_files: List files in a directory.
+- list_files: List files and directories inside a given path.
 - install_python_package: Install pip packages inside the sandbox.
 - run_playwright_script: Execute a Playwright script (Playwright + Chromium are pre-installed).
 
 Guidelines:
 1. ALWAYS verify your approach by actually running code — don't just describe what you'd do.
-2. When http_request returns a 'full_response_file', use grep_file or read_file_range to examine the content.
-   Do NOT try to read the entire file with read_file if it's large; use targeted queries instead.
-3. For web automation tasks, use run_playwright_script with a complete Python script.
-4. The sandbox has full internet access. Standard library and pip-installable packages are available.
-5. **IMPORTANT**: Quote exact tool outputs in your final response. Do not invent data.
-6. This is an educational environment. Respect website Terms of Service.
-7. Report results clearly, including the actual stdout/stderr/exit codes from the sandbox.
+2. For web automation tasks, use run_playwright_script with a complete, well-written Python script.
+3. If a Python package is missing, use install_python_package before executing scripts that require it.
+4. When http_request returns a 'full_response_file' field, the response body was too large to include directly.
+   DO NOT attempt to read the entire file with read_file. Instead, use grep_file to search for specific information,
+   or read_file_range to inspect portions of the file. Use list_files to locate saved response files if needed.
+5. **IMPORTANT**: When a tool returns data, **always quote the exact output** in your final response.
+   Do not invent, summarize, or alter the tool's output unless the user explicitly asks for a summary.
+6. The sandbox has full internet access. Standard library and pip-installable packages are available.
+7. This is an educational environment. Do not attempt to violate any website's Terms of Service.
+   If asked to automate LinkedIn, explain the ethical concerns and proceed only with a mock/demo site.
+8. Report results clearly, including the actual stdout/stderr/exit codes from the sandbox.
 """
 
 def format_tool_result(tool_name: str, result: dict) -> str:

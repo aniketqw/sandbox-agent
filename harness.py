@@ -7,7 +7,7 @@ import sys
 from dotenv import load_dotenv
 from langsmith import traceable
 from langchain_core.messages import HumanMessage, SystemMessage
-
+import logging
 from sandbox.container import start_sandbox
 from agent import get_agent_graph
 
@@ -18,6 +18,9 @@ load_dotenv()
 if os.getenv("LANGSMITH_API_KEY"):
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "sandbox-agent")
+
+logging.basicConfig(level=logging.DEBUG)
+
 
 SYSTEM_PROMPT = """You are a powerful coding assistant with access to an isolated Docker sandbox that has full internet access.
 You can execute shell commands, Python code, and automate a web browser (using Playwright) safely.

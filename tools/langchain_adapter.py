@@ -1,5 +1,5 @@
 # tools/langchain_adapter.py
-from typing import Type, Optional, get_type_hints
+from typing import Type
 from pydantic import BaseModel, Field, create_model
 from langchain_core.tools import StructuredTool
 
@@ -7,9 +7,6 @@ from tools.dispatch import TOOL_DISPATCH
 from tools.schemas import TOOLS
 
 def _create_args_schema_from_openai(tool_def: dict) -> Type[BaseModel]:
-    """
-    Dynamically create a Pydantic model from OpenAI tool parameters using create_model.
-    """
     params = tool_def["function"]["parameters"]
     properties = params.get("properties", {})
     required = params.get("required", [])
@@ -28,34 +25,42 @@ def _create_args_schema_from_openai(tool_def: dict) -> Type[BaseModel]:
         elif prop.get("type") == "boolean":
             field_type = bool
 
-        # Use ... for required fields, None for optional
         default = ... if name in required else None
         field_definitions[name] = (field_type, Field(default, description=prop.get("description", "")))
 
-    # create_model handles the type annotations correctly
-    return create_model(
-        f"{tool_def['function']['name']}_args",
-        **field_definitions
-    )
+    return create_model(f"{tool_def['function']['name']}_args", **field_definitions)
 
-# Build LangChain tools
+
+def _get_tool_schema(tool: StructuredTool) -> dict:
+    """Generate a clean JSON Schema for the tool's input."""
+    if tool.args_schema:
+        schema = tool.args_schema.model_json_schema()
+        # Remove Pydantic-specific keys that Anthropic may reject
+        schema.pop("title", None)
+        schema.pop("description", None)  # top-level description not needed
+        # Ensure type is set
+        if "type" not in schema:
+            schema["type"] = "object"
+        return schema
+    return {"type": "object", "properties": {}}
+
+
 LANGCHAIN_TOOLS = []
 for tool_def in TOOLS:
     func_name = tool_def["function"]["name"]
     if func_name not in TOOL_DISPATCH:
         continue
-
     func = TOOL_DISPATCH[func_name]
     description = tool_def["function"]["description"]
     args_schema = _create_args_schema_from_openai(tool_def)
 
-    structured_tool = StructuredTool(
+    tool = StructuredTool(
         name=func_name,
         description=description,
         func=func,
         args_schema=args_schema,
     )
-    LANGCHAIN_TOOLS.append(structured_tool)
+    LANGCHAIN_TOOLS.append(tool)
 
 def get_tools():
     return LANGCHAIN_TOOLS

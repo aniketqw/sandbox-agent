@@ -12,7 +12,7 @@ from sandbox.container import start_sandbox
 from agent import get_agent_graph
 
 load_dotenv()
-
+MAX_STEPS = 10
 # Enable LangSmith if API key present
 if os.getenv("LANGSMITH_API_KEY"):
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -132,8 +132,10 @@ def main():
         # Get final state after the turn
         final_state = graph.get_state(config)
         if final_state and final_state.values:
-            state = final_state.values  # update state with new messages and step_count
+            state = final_state.values
             last_msg = state["messages"][-1]
+            if state.get("step_count", 0) >= MAX_STEPS:
+                print("\n[Agent] Reached maximum steps. Final response:")
             print(f"\n{'='*60}")
             print(f"Agent: {last_msg.content}")
             print(f"{'='*60}")

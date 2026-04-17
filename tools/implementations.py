@@ -26,7 +26,6 @@ def http_request(url: str, method: str = "GET", data: str = None, headers: dict 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     response_file = os.path.join(HTTP_RESPONSE_DIR, f"resp_{timestamp}.json")
 
-    # Use repr() to produce Python literals (None becomes 'None', not null)
     data_repr = repr(data)
     headers_repr = repr(headers)
 

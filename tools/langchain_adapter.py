@@ -1,5 +1,5 @@
 # tools/langchain_adapter.py
-from typing import Type
+from typing import Type, Dict, Any
 from pydantic import BaseModel, Field, create_model
 from langchain_core.tools import StructuredTool
 
@@ -32,22 +32,49 @@ def _create_args_schema_from_openai(tool_def: dict) -> Type[BaseModel]:
     return create_model(f"{tool_def['function']['name']}_args", **field_definitions)
 
 
-def _clean_schema(schema: dict) -> dict:
-    """Remove Pydantic's 'title' fields that may confuse Anthropic."""
+def _clean_schema_for_anthropic(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively remove 'title' fields and 'default' keys with null values.
+    Also ensures 'required' lists only fields that are actually required.
+    """
+    # Remove Pydantic metadata
     schema.pop("title", None)
+    schema.pop("description", None)   # top-level description not needed
+    
+    # Process properties
     if "properties" in schema:
-        for prop in schema["properties"].values():
-            if isinstance(prop, dict):
-                prop.pop("title", None)
+        cleaned_props = {}
+        for prop_name, prop_schema in schema["properties"].items():
+            if isinstance(prop_schema, dict):
+                prop_schema.pop("title", None)
+                # Remove default: null
+                if "default" in prop_schema and prop_schema["default"] is None:
+                    del prop_schema["default"]
+                cleaned_props[prop_name] = prop_schema
+        schema["properties"] = cleaned_props
+
+    # Clean items if array type
     if "items" in schema and isinstance(schema["items"], dict):
         schema["items"].pop("title", None)
+
+    # Ensure required only contains properties that exist
+    if "required" in schema:
+        existing_props = set(schema.get("properties", {}).keys())
+        schema["required"] = [r for r in schema["required"] if r in existing_props]
+        if not schema["required"]:
+            del schema["required"]
+
+    # Add type if missing
+    if "type" not in schema:
+        schema["type"] = "object"
+
     return schema
 
 
 def _get_tool_schema(tool: StructuredTool) -> dict:
     if tool.args_schema:
         schema = tool.args_schema.model_json_schema()
-        return _clean_schema(schema)
+        return _clean_schema_for_anthropic(schema)
     return {"type": "object", "properties": {}}
 
 

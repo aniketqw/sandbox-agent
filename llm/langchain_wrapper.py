@@ -90,13 +90,13 @@ class AnthropicProxyChatModel(BaseChatModel):
         logger.debug("Anthropic tools:\n%s", json.dumps(anthropic_tools, indent=2))
 
         response = self.client.chat.completions.create(
-            model=self.model,
-            messages=converted_messages,
-            tools=anthropic_tools,
-            tool_choice="auto" if anthropic_tools else None,   # string, not dict
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-        )
+        model=self.model,
+        messages=converted_messages,
+        tools=anthropic_tools,
+        tool_choice="auto" if anthropic_tools else None,
+        max_tokens=self.max_tokens,
+        temperature=self.temperature,
+)
 
         logger.debug("Raw proxy response: %s", response)
 

@@ -88,11 +88,7 @@ class AnthropicProxyClient:
                 if anthropic_tools:
                     payload["tools"] = anthropic_tools
                     if tool_choice:
-                        # Support both string and dict
-                        if isinstance(tool_choice, str):
-                            payload["tool_choice"] = {"type": tool_choice}
-                        else:
-                            payload["tool_choice"] = tool_choice
+                        payload["tool_choice"] = {"type": tool_choice} if isinstance(tool_choice, str) else tool_choice
 
                 headers = {
                     "Content-Type": "application/json",

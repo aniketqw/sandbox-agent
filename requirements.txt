@@ -1,3 +1,8 @@
 openai>=1.0.0
 docker>=6.0.0
 pydantic>=2.0.0
+langgraph 
+langchain 
+langchain-core 
+langsmith 
+python-dotenv

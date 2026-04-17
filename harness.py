@@ -1,41 +1,23 @@
 """
-harness.py — The main entry point.
-Implements the ReAct (Reason + Act) loop connecting Ollama → Docker sandbox.
-
-Run with:
-    python harness.py
+harness.py — LangGraph-powered agent with checkpointing and LangSmith.
 """
+
 import os
-import json
 import sys
-from openai import OpenAI
 from dotenv import load_dotenv
+from langsmith import traceable
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from sandbox import start_sandbox
-from tools import TOOL_DISPATCH
-from schemas import TOOLS
-from llm_client import AnthropicProxyClient
-# # ── Configuration ──────────────────────────────────────────────────────────────
-# OLLAMA_BASE_URL = "http://localhost:11434/v1"
-# OLLAMA_API_KEY  = "ollama"          # Ollama doesn't need a real key
-# MODEL           = "qwen2.5"          # Change to "mistral" or another pulled model
-MAX_ITERATIONS  = 10                # Safety limit: max tool calls per user turn
+from agent_graph import get_agent_graph
 
-
-
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
-# Configuration with fallbacks
-OPUS_BASE_URL = os.getenv("OPUS_BASE_URL", "https://opus.abhibots.com")
-OPUS_API_KEY  = os.getenv("OPUS_API_KEY")
-OPUS_MODEL    = os.getenv("OPUS_MODEL", "claude-sonnet-4-20250514")
-
-if not OPUS_API_KEY:
-    raise ValueError("OPUS_API_KEY environment variable is not set. Please define it in a .env file.")
-
-
-# For compatibility with existing code, keep MODEL variable if needed elsewhere
-MODEL = OPUS_MODEL
+# Enable LangSmith if API key present
+if os.getenv("LANGSMITH_API_KEY"):
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "sandbox-agent")
 
 SYSTEM_PROMPT = """You are a powerful coding assistant with access to an isolated Docker sandbox that has full internet access.
 You can execute shell commands, Python code, and automate a web browser (using Playwright) safely.
@@ -67,127 +49,34 @@ Guidelines:
 8. Report results clearly, including the actual stdout/stderr/exit codes from the sandbox.
 """
 
-def format_tool_result(tool_name: str, result: dict) -> str:
-    """Format a tool result as a readable string for the LLM."""
-    lines = [f"Tool: {tool_name}", f"Result: {json.dumps(result, indent=2)}"]
-    return "\n".join(lines)
-
-
-def run_agent_turn(client: OpenAI, messages: list) -> list:
-    """
-    Execute one full ReAct cycle for a user message.
-    Loops until the LLM returns a natural-language response (no more tool calls).
-
-    Returns the updated messages list.
-    """
-    iteration = 0
-
-    while iteration < MAX_ITERATIONS:
-        iteration += 1
-        print(f"\n[Agent] Calling LLM (iteration {iteration})...")
-
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",    # Let the model decide when to use tools
-        )
-
-        message = response.choices[0].message
-
-        # ── Case 1: Model wants to call tools ─────────────────────────────────
-        if message.tool_calls:
-            # Append the assistant's tool_calls message to history
-            messages.append({
-                "role": "assistant",
-                "content": message.content or "",
-                "tool_calls": [
-                    {
-                        "id":       tc.id,
-                        "type":     "function",
-                        "function": {
-                            "name":      tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in message.tool_calls
-                ],
-            })
-
-            # Execute each tool call and append results
-            for tool_call in message.tool_calls:
-                tool_name = tool_call.function.name
-                try:
-                    args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError as e:
-                    args = {}
-                    print(f"[Agent] Warning: Could not parse tool args: {e}")
-
-                print(f"[Agent] Executing tool: {tool_name}({list(args.keys())})")
-
-                if tool_name in TOOL_DISPATCH:
-                    result = TOOL_DISPATCH[tool_name](**args)
-                else:
-                    result = {"error": f"Unknown tool: {tool_name}"}
-
-                # Append the tool result to message history
-                messages.append({
-                    "role":         "tool",
-                    "tool_call_id": tool_call.id,
-                    "name":         tool_name,
-                    "content":      json.dumps(result),
-                })
-
-        # ── Case 2: Model is done — natural language response ─────────────────
-        else:
-            final_response = message.content or "(No response)"
-            messages.append({
-                "role":    "assistant",
-                "content": final_response,
-            })
-            print(f"\n{'='*60}")
-            print(f"Agent: {final_response}")
-            print(f"{'='*60}")
-            return messages  # Done with this turn
-
-    # If we hit the iteration limit
-    print(f"\n[Agent] Reached max iterations ({MAX_ITERATIONS}). Stopping.")
-    messages.append({
-        "role":    "assistant",
-        "content": f"I've reached the maximum number of steps ({MAX_ITERATIONS}). Please refine your request.",
-    })
-    return messages
-
+@traceable
+def run_agent(messages: list, thread_id: str):
+    graph, _ = get_agent_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    final_state = graph.invoke({"messages": messages}, config=config)
+    return final_state["messages"]
 
 def main():
     print("=" * 60)
-    print("  🤖  Local Sandbox Agent")
-    print("  Model: Ollama /", MODEL)
-    print("  Sandbox: Docker (python:3.11-slim)")
+    print("  🤖  LangGraph Sandbox Agent")
+    print("  Model: Opus Proxy /", os.getenv("OPUS_MODEL", "claude-sonnet-4-20250514"))
+    print("  Sandbox: Docker")
     print("=" * 60)
 
-    # Phase 1: Start the Docker sandbox
+    # Start sandbox
     start_sandbox()
 
-    # # Phase 2: Initialize the OpenAI client pointed at Ollama
-    # client = OpenAI(
-    #     base_url=OLLAMA_BASE_URL,
-    #     api_key=OLLAMA_API_KEY,
-    # )
-    # Initialize the LLM client
-    client = AnthropicProxyClient(
-    base_url=OPUS_BASE_URL,
-    api_key=OPUS_API_KEY,
-    model=OPUS_MODEL
-    )
-
-
-    # Phase 3: Initialize conversation with system prompt
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Get agent graph (initializes LLM and tools)
+    get_agent_graph()
 
     print("\nSandbox agent ready. Type your request (or 'exit' to quit).\n")
 
-    # Phase 4: Main REPL loop
+    # Session ID for memory
+    thread_id = "main-user-session"
+
+    # Initial system message
+    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+
     while True:
         try:
             user_input = input("You: ").strip()
@@ -201,12 +90,36 @@ def main():
             print("[Agent] Goodbye!")
             break
 
-        # Append user message and run the ReAct loop
-        messages.append({"role": "user", "content": user_input})
-        messages = run_agent_turn(client, messages)
+        messages.append(HumanMessage(content=user_input))
 
-    # atexit in sandbox.py handles container cleanup automatically
+        # Run agent with streaming output
+        graph, _ = get_agent_graph()
+        config = {"configurable": {"thread_id": thread_id}}
 
+        print("\n[Agent] Thinking...")
+        # Stream events for real-time feedback
+        for event in graph.stream({"messages": messages}, config=config):
+            for node_name, node_output in event.items():
+                if node_name == "agent":
+                    msg = node_output.get("messages", [])[-1]
+                    if hasattr(msg, "tool_calls") and msg.tool_calls:
+                        print(f"[Agent] Calling tools: {[tc['name'] for tc in msg.tool_calls]}")
+                elif node_name == "tools":
+                    print("[Agent] Tools executed.")
+
+        # Retrieve final state to get the last message
+        final_state = graph.get_state(config)
+        if final_state and final_state.values:
+            final_messages = final_state.values.get("messages", [])
+            if final_messages:
+                last_msg = final_messages[-1]
+                print(f"\n{'='*60}")
+                print(f"Agent: {last_msg.content}")
+                print(f"{'='*60}")
+                # Update messages with full conversation for next turn
+                messages = final_messages
+        else:
+            print("[Agent] No response received.")
 
 if __name__ == "__main__":
     main()

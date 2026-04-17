@@ -3,15 +3,18 @@ LangChain-compatible wrapper for AnthropicProxyClient.
 Supports tool binding and conforms to BaseChatModel interface.
 """
 
+
+# llm/langchain_wrapper.py
 import json
-from typing import Any, List, Optional, Iterator, Dict
+import os
+from typing import Any, List, Optional, Iterator
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import BaseTool
 from pydantic import Field
 
-from llm_client import AnthropicProxyClient
+from llm.client import AnthropicProxyClient
 
 
 class AnthropicProxyChatModel(BaseChatModel):

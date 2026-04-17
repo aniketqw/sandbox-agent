@@ -2,17 +2,16 @@
 sandbox.py — Manages the Docker container lifecycle.
 Spins up a sandboxed Python container with internet access and tears it down cleanly.
 """
-
 import docker
 import os
 import atexit
 
-WORKSPACE_HOST = os.path.join(os.path.dirname(__file__), "agent_workspace")
+WORKSPACE_HOST = os.path.join(os.path.dirname(__file__), "..", "agent_workspace")
+WORKSPACE_HOST = os.path.abspath(WORKSPACE_HOST)  # Resolve to absolute path
 WORKSPACE_CONTAINER = "/workspace"
 IMAGE = "mcr.microsoft.com/playwright/python:v1.58.0-noble"
 CONTAINER_NAME = "sandbox_agent_env"
 
-# Use explicit socket path for Docker Desktop on macOS
 client = docker.DockerClient(base_url='unix:///Users/aniketsaxena/.docker/run/docker.sock')
 _container = None
 

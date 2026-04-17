@@ -1,14 +1,13 @@
 """
 Convert existing tool functions into LangChain StructuredTools.
 """
-
-from typing import Type, Optional
+# tools/langchain_adapter.py
+from typing import Type
 from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 
-from tools import TOOL_DISPATCH
-import schemas
-
+from tools.dispatch import TOOL_DISPATCH
+from tools.schemas import TOOLS
 
 def _create_args_schema_from_openai(tool_def: dict) -> Type[BaseModel]:
     """
@@ -41,24 +40,20 @@ def _create_args_schema_from_openai(tool_def: dict) -> Type[BaseModel]:
 
 # Build a list of LangChain tools from schemas and dispatch table
 LANGCHAIN_TOOLS = []
-
-for tool_def in schemas.TOOLS:
+for tool_def in TOOLS:
     func_name = tool_def["function"]["name"]
     if func_name not in TOOL_DISPATCH:
         continue
-
     func = TOOL_DISPATCH[func_name]
     description = tool_def["function"]["description"]
     args_schema = _create_args_schema_from_openai(tool_def)
-
-    structured_tool = StructuredTool(
-        name=func_name,
-        description=description,
-        func=func,
-        args_schema=args_schema,
+    LANGCHAIN_TOOLS.append(
+        StructuredTool(
+            name=func_name,
+            description=description,
+            func=func,
+            args_schema=args_schema,
+        )
     )
-    LANGCHAIN_TOOLS.append(structured_tool)
-
-
 def get_tools():
     return LANGCHAIN_TOOLS

@@ -6,7 +6,7 @@ Each function maps 1-to-1 with a JSON schema defined in schemas.py.
 import os
 import json
 from datetime import datetime
-from sandbox import get_container, WORKSPACE_CONTAINER
+from sandbox.container import get_container, WORKSPACE_CONTAINER
 
 TEMP_SCRIPT = os.path.join(WORKSPACE_CONTAINER, "agent_temp.py")
 HTTP_RESPONSE_DIR = os.path.join(WORKSPACE_CONTAINER, "http_responses")

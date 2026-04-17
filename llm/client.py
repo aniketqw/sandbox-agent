@@ -84,10 +84,15 @@ class AnthropicProxyClient:
                 }
                 if system_prompt:
                     payload["system"] = system_prompt
+                            # Inside create() method, after building payload:
                 if anthropic_tools:
                     payload["tools"] = anthropic_tools
-                    if tool_choice == "auto":
-                        payload["tool_choice"] = {"type": "auto"}
+                    if tool_choice:
+                        # Support both string and dict
+                        if isinstance(tool_choice, str):
+                            payload["tool_choice"] = {"type": tool_choice}
+                        else:
+                            payload["tool_choice"] = tool_choice
 
                 headers = {
                     "Content-Type": "application/json",

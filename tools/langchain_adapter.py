@@ -6,6 +6,7 @@ from langchain_core.tools import StructuredTool
 from tools.dispatch import TOOL_DISPATCH
 from tools.schemas import TOOLS
 
+
 def _create_args_schema_from_openai(tool_def: dict) -> Type[BaseModel]:
     params = tool_def["function"]["parameters"]
     properties = params.get("properties", {})
@@ -31,17 +32,22 @@ def _create_args_schema_from_openai(tool_def: dict) -> Type[BaseModel]:
     return create_model(f"{tool_def['function']['name']}_args", **field_definitions)
 
 
+def _clean_schema(schema: dict) -> dict:
+    """Remove Pydantic's 'title' fields that may confuse Anthropic."""
+    schema.pop("title", None)
+    if "properties" in schema:
+        for prop in schema["properties"].values():
+            if isinstance(prop, dict):
+                prop.pop("title", None)
+    if "items" in schema and isinstance(schema["items"], dict):
+        schema["items"].pop("title", None)
+    return schema
+
+
 def _get_tool_schema(tool: StructuredTool) -> dict:
-    """Generate a clean JSON Schema for the tool's input."""
     if tool.args_schema:
         schema = tool.args_schema.model_json_schema()
-        # Remove Pydantic-specific keys that Anthropic may reject
-        schema.pop("title", None)
-        schema.pop("description", None)  # top-level description not needed
-        # Ensure type is set
-        if "type" not in schema:
-            schema["type"] = "object"
-        return schema
+        return _clean_schema(schema)
     return {"type": "object", "properties": {}}
 
 
@@ -61,6 +67,7 @@ for tool_def in TOOLS:
         args_schema=args_schema,
     )
     LANGCHAIN_TOOLS.append(tool)
+
 
 def get_tools():
     return LANGCHAIN_TOOLS

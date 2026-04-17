@@ -19,8 +19,8 @@ if os.getenv("LANGSMITH_API_KEY"):
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "sandbox-agent")
 
-logging.basicConfig(level=logging.DEBUG)
-
+# logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.WARNING)   # Only warnings and errors show
 
 SYSTEM_PROMPT = """You are a powerful coding assistant with access to an isolated Docker sandbox that has full internet access.
 You can execute shell commands, Python code, and automate a web browser (using Playwright) safely.

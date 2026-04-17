@@ -5,6 +5,23 @@ These are passed to the LLM in the `tools` array so it knows what to call.
 
 TOOLS = [
     # Add these tool definitions to the TOOLS list
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_human",
+            "description": "Ask the human user a question when you are stuck or need clarification.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question to ask the user."
+                    }
+                },
+                "required": ["question"]
+            }
+        }
+    },
 
     {
         "type": "function",

@@ -10,6 +10,7 @@ from tools.implementations import (
     grep_file,
     read_file_range,
     list_files,
+    ask_human,
 )
 
 TOOL_DISPATCH = {
@@ -23,4 +24,5 @@ TOOL_DISPATCH = {
     "grep_file": grep_file,
     "read_file_range": read_file_range,
     "list_files": list_files,
+    "ask_human": ask_human,
 }

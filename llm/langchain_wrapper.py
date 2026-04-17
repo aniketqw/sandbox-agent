@@ -223,17 +223,19 @@ class AnthropicProxyChatModel(BaseChatModel):
                 })
 
         # Fallback: try to parse pseudo‑calls from content
+        # After extracting pseudo_calls, clean content more thoroughly
         if not lc_tool_calls and content:
             pseudo_calls = _parse_pseudo_tool_calls(content)
             if pseudo_calls:
                 logger.info("Extracted pseudo tool calls: %s", pseudo_calls)
                 lc_tool_calls = pseudo_calls
-                # Clean up the content by removing the pseudo‑syntax
+                # Remove various pseudo-syntax patterns
                 content = re.sub(r"\[TOOL_CALL\].*?\[/TOOL_CALL\]", "", content, flags=re.DOTALL)
                 content = re.sub(r"%\w+.*?(?=\n\n|$)", "", content, flags=re.DOTALL)
                 content = re.sub(r"<[^>]+>.*?</[^>]+>", "", content, flags=re.DOTALL)
+                content = re.sub(r"<parameter[^>]*>.*?</parameter>", "", content, flags=re.DOTALL)  # <-- new
+                content = re.sub(r"\{'tool':.*?\}", "", content, flags=re.DOTALL)                  # remove raw dict blocks
                 content = content.strip()
-
         if lc_tool_calls:
             message = AIMessage(content=content, tool_calls=lc_tool_calls)
         else:

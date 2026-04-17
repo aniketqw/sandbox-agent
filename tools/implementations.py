@@ -11,59 +11,57 @@ from sandbox.container import get_container, WORKSPACE_CONTAINER
 TEMP_SCRIPT = os.path.join(WORKSPACE_CONTAINER, "agent_temp.py")
 HTTP_RESPONSE_DIR = os.path.join(WORKSPACE_CONTAINER, "http_responses")
 
+def ask_human(question: str) -> dict:
+    """Ask the human user a question and wait for a response."""
+    print(f"\n[Agent needs your input] {question}")
+    response = input("Your answer: ").strip()
+    return {"answer": response}
 
 def http_request(url: str, method: str = "GET", data: str = None, headers: dict = None) -> dict:
-    """
-    Perform an HTTP request inside the sandbox using urllib (built-in).
-    Large response bodies (>2000 chars) are saved to a file and a summary is returned.
-    """
     container = get_container()
     print(f"\n[Tool] http_request: {method} {url}")
 
-    # Ensure the response directory exists
     container.exec_run(cmd=["sh", "-c", f"mkdir -p {HTTP_RESPONSE_DIR}"])
 
-    # Generate a unique filename for this response
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     response_file = os.path.join(HTTP_RESPONSE_DIR, f"resp_{timestamp}.json")
 
-    # Build the script as a single string with proper escaping
-    script_lines = [
-        "import urllib.request",
-        "import json",
-        f"url = {json.dumps(url)}",
-        f"method = {json.dumps(method)}",
-        f"data = {repr(data)}",
-        f"headers = {repr(headers)}",
-        "",
-        "req = urllib.request.Request(url, method=method)",
-        "if headers is not None:",
-        "    for k, v in headers.items():",
-        "        req.add_header(k, v)",
-        "if data is not None and method == 'POST':",
-        "    req.data = data.encode('utf-8')",
-        "",
-        "try:",
-        "    with urllib.request.urlopen(req) as response:",
-        "        status = response.status",
-        "        resp_headers = dict(response.headers)",
-        "        body = response.read().decode('utf-8', errors='replace')",
-        "        output = {'status': status, 'headers': resp_headers, 'body': body}",
-        f"        with open('{response_file}', 'w') as f:",
-        "            json.dump(output, f)",
-        "        print(json.dumps(output))",
-        "except Exception as e:",
-        "    print(json.dumps({'error': str(e)}))",
-    ]
-    script = "\n".join(script_lines)
+    # Use repr() to produce Python literals (None becomes 'None', not null)
+    data_repr = repr(data)
+    headers_repr = repr(headers)
 
-    # Write script using printf to avoid heredoc issues
-    # Escape single quotes for the shell
+    script = f"""
+import urllib.request
+import json
+
+url = {json.dumps(url)}
+method = {json.dumps(method)}
+data = {data_repr}
+headers = {headers_repr}
+
+req = urllib.request.Request(url, method=method)
+if headers is not None:
+    for k, v in headers.items():
+        req.add_header(k, v)
+if data is not None and method == "POST":
+    req.data = data.encode('utf-8')
+
+try:
+    with urllib.request.urlopen(req) as response:
+        status = response.status
+        resp_headers = dict(response.headers)
+        body = response.read().decode('utf-8', errors='replace')
+        output = {{"status": status, "headers": resp_headers, "body": body}}
+        with open("{response_file}", "w") as f:
+            json.dump(output, f)
+        print(json.dumps(output))
+except Exception as e:
+    print(json.dumps({{"error": str(e)}}))
+"""
     safe_script = script.replace("'", "'\\''")
     write_cmd = f"printf '%s' '{safe_script}' > /tmp/http_req.py"
     container.exec_run(cmd=["sh", "-c", write_cmd])
 
-    # Execute the script
     result = container.exec_run(cmd=["python", "/tmp/http_req.py"], demux=True)
 
     stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
@@ -78,7 +76,6 @@ def http_request(url: str, method: str = "GET", data: str = None, headers: dict 
     except json.JSONDecodeError:
         parsed = {"error": "Failed to parse JSON", "raw_stdout": stdout, "stderr": stderr}
 
-    # If body is large, return a summary and point to the saved file
     if "body" in parsed and len(parsed.get("body", "")) > 2000:
         body_preview = parsed["body"][:500] + "... [truncated]"
         return {
@@ -88,8 +85,7 @@ def http_request(url: str, method: str = "GET", data: str = None, headers: dict 
             "full_response_file": response_file,
             "note": f"Response body too large ({len(parsed['body'])} chars). Full response saved to {response_file}. Use grep_file or read_file_range to explore it."
         }
-    else:
-        return parsed
+    return parsed
 
 def install_python_package(packages: list) -> dict:
     """

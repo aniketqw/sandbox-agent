@@ -1,4 +1,4 @@
-# agent/graph.py
+# agent/graph.py (updated)
 import os
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
@@ -8,6 +8,8 @@ from llm.factory import get_chat_model
 from tools.langchain_adapter import get_tools
 from agent.state import AgentState
 
+MAX_STEPS = 10   # safety limit
+
 _graph = None
 _checkpointer = None
 
@@ -16,14 +18,16 @@ def get_agent_graph():
     if _graph is not None:
         return _graph, _checkpointer
 
-    # Get the appropriate chat model based on LLM_PROVIDER
     llm = get_chat_model()
     tools = get_tools()
     llm_with_tools = llm.bind_tools(tools)
 
     def agent_node(state: AgentState):
         response = llm_with_tools.invoke(state["messages"])
-        return {"messages": [response]}
+        return {
+            "messages": [response],
+            "step_count": state.get("step_count", 0) + 1
+        }
 
     workflow = StateGraph(AgentState)
     workflow.add_node("agent", agent_node)
@@ -31,6 +35,8 @@ def get_agent_graph():
     workflow.set_entry_point("agent")
 
     def should_continue(state: AgentState):
+        if state.get("step_count", 0) >= MAX_STEPS:
+            return END
         last_message = state["messages"][-1]
         if hasattr(last_message, "tool_calls") and last_message.tool_calls:
             return "tools"

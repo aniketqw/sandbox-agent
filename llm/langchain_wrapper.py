@@ -105,6 +105,23 @@ def _parse_pseudo_tool_calls(content: str) -> list:
             })
         except:
             pass
+    # NEW: Pattern for Claude's output: {'tool': 'http_request', 'args': {--url '...' --method 'GET'}}
+    # Matches {'tool': 'tool_name', 'args': { ... }}
+    pattern5 = r"\{'tool'\s*:\s*'(\w+)'\s*,\s*'args'\s*:\s*\{([^}]+)\}\}"
+    for tool_name, args_str in re.findall(pattern5, content, re.DOTALL):
+        args = {}
+        # Parse arguments like --key 'value' or --key "value"
+        arg_pattern = r"--(\w+)\s+['\"]([^'\"]*)['\"]"
+        for k, v in re.findall(arg_pattern, args_str):
+            args[k] = v
+        tool_calls.append({
+            "id": f"pseudo_claude_{tool_name}_{len(tool_calls)}",
+            "name": tool_name,
+            "args": args,
+            "type": "tool_call",
+        })
+
+    
 
     return tool_calls
 

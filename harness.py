@@ -13,14 +13,13 @@ from agent import get_agent_graph
 
 load_dotenv()
 
-
 # Enable LangSmith if API key present
 if os.getenv("LANGSMITH_API_KEY"):
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "sandbox-agent")
 
-# logging.basicConfig(level=logging.DEBUG)
-logging.basicConfig(level=logging.WARNING)   # Only warnings and errors show
+# Set logging to WARNING to keep terminal clean
+logging.basicConfig(level=logging.WARNING)
 
 SYSTEM_PROMPT = """You are a powerful coding assistant with access to an isolated Docker sandbox that has full internet access.
 You can execute shell commands, Python code, and automate a web browser (using Playwright) safely.
@@ -63,14 +62,19 @@ Guidelines:
 """
 
 @traceable
-def run_agent(messages: list, thread_id: str):
+def run_agent(state: dict, thread_id: str):
     graph, _ = get_agent_graph()
     config = {"configurable": {"thread_id": thread_id}}
-    final_state = graph.invoke({"messages": messages}, config=config)
-    return final_state["messages"]
+    final_state = graph.invoke(state, config=config)
+    return final_state
+
 def main():
     provider = os.getenv("LLM_PROVIDER", "opus").upper()
-    model = os.getenv("OPUS_MODEL") if provider == "OPUS" else os.getenv("OLLAMA_MODEL", "llama3.2")
+    if provider == "OPUS":
+        model = os.getenv("OPUS_MODEL", "claude-sonnet-4-20250514")
+    else:
+        model = os.getenv("OLLAMA_MODEL", "llama3.2")
+
     print("=" * 60)
     print("  🤖  LangGraph Sandbox Agent")
     print(f"  LLM: {provider} / {model}")
@@ -83,7 +87,11 @@ def main():
     print("\nSandbox agent ready. Type your request (or 'exit' to quit).\n")
 
     thread_id = "main-user-session"
-    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+    # Initial state includes messages and step counter
+    state = {
+        "messages": [SystemMessage(content=SYSTEM_PROMPT)],
+        "step_count": 0
+    }
 
     while True:
         try:
@@ -98,13 +106,17 @@ def main():
             print("[Agent] Goodbye!")
             break
 
-        messages.append(HumanMessage(content=user_input))
+        # Append user message to state
+        state["messages"].append(HumanMessage(content=user_input))
+        # Reset step count for new user turn
+        state["step_count"] = 0
 
         graph, _ = get_agent_graph()
         config = {"configurable": {"thread_id": thread_id}}
 
         print("\n[Agent] Thinking...")
-        for event in graph.stream({"messages": messages}, config=config):
+        # Stream events for real-time feedback
+        for event in graph.stream(state, config=config):
             for node_name, node_output in event.items():
                 if node_name == "agent":
                     msg = node_output.get("messages", [])[-1]
@@ -113,92 +125,16 @@ def main():
                 elif node_name == "tools":
                     print("[Agent] Tools executed.")
 
+        # Get final state after the turn
         final_state = graph.get_state(config)
         if final_state and final_state.values:
-            final_messages = final_state.values.get("messages", [])
-            if final_messages:
-                last_msg = final_messages[-1]
-                print(f"\n{'='*60}")
-                print(f"Agent: {last_msg.content}")
-                print(f"{'='*60}")
-                messages = final_messages
+            state = final_state.values  # update state with new messages and step_count
+            last_msg = state["messages"][-1]
+            print(f"\n{'='*60}")
+            print(f"Agent: {last_msg.content}")
+            print(f"{'='*60}")
         else:
             print("[Agent] No response received.")
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-# def main():
-#     print("=" * 60)
-#     print("  🤖  LangGraph Sandbox Agent")
-#     print("  Model: Opus Proxy /", os.getenv("OPUS_MODEL", "claude-sonnet-4-20250514"))
-#     print("  Sandbox: Docker")
-#     print("=" * 60)
-
-#     # Start sandbox
-#     start_sandbox()
-
-#     # Get agent graph (initializes LLM and tools)
-#     get_agent_graph()
-
-#     print("\nSandbox agent ready. Type your request (or 'exit' to quit).\n")
-
-#     # Session ID for memory
-#     thread_id = "main-user-session"
-
-#     # Initial system message
-#     messages = [SystemMessage(content=SYSTEM_PROMPT)]
-
-#     while True:
-#         try:
-#             user_input = input("You: ").strip()
-#         except (EOFError, KeyboardInterrupt):
-#             print("\n[Agent] Interrupted. Shutting down...")
-#             break
-
-#         if not user_input:
-#             continue
-#         if user_input.lower() in ("exit", "quit", "bye"):
-#             print("[Agent] Goodbye!")
-#             break
-
-#         messages.append(HumanMessage(content=user_input))
-
-#         # Run agent with streaming output
-#         graph, _ = get_agent_graph()
-#         config = {"configurable": {"thread_id": thread_id}}
-
-#         print("\n[Agent] Thinking...")
-#         # Stream events for real-time feedback
-#         for event in graph.stream({"messages": messages}, config=config):
-#             for node_name, node_output in event.items():
-#                 if node_name == "agent":
-#                     msg = node_output.get("messages", [])[-1]
-#                     if hasattr(msg, "tool_calls") and msg.tool_calls:
-#                         print(f"[Agent] Calling tools: {[tc['name'] for tc in msg.tool_calls]}")
-#                 elif node_name == "tools":
-#                     print("[Agent] Tools executed.")
-
-#         # Retrieve final state to get the last message
-#         final_state = graph.get_state(config)
-#         if final_state and final_state.values:
-#             final_messages = final_state.values.get("messages", [])
-#             if final_messages:
-#                 last_msg = final_messages[-1]
-#                 print(f"\n{'='*60}")
-#                 print(f"Agent: {last_msg.content}")
-#                 print(f"{'='*60}")
-#                 # Update messages with full conversation for next turn
-#                 messages = final_messages
-#         else:
-#             print("[Agent] No response received.")
-
-# if __name__ == "__main__":
-#     main()

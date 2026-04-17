@@ -7,7 +7,7 @@ import os
 import json
 from datetime import datetime
 from sandbox.container import get_container, WORKSPACE_CONTAINER
-
+from tavily import TavilyClient
 TEMP_SCRIPT = os.path.join(WORKSPACE_CONTAINER, "agent_temp.py")
 HTTP_RESPONSE_DIR = os.path.join(WORKSPACE_CONTAINER, "http_responses")
 
@@ -46,6 +46,34 @@ def request_approval(plan_summary: str, code_to_execute: str = "") -> dict:
     else:
         feedback = console.input("[bold]What should be changed? [/]") or "Not approved."
         return {"approved": False, "feedback": feedback}
+
+
+def web_search(query: str, max_results: int = 5) -> dict:
+    """
+    Perform a web search using Tavily API.
+    Returns a list of relevant results with titles, URLs, and snippets.
+    """
+    api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key:
+        return {"error": "TAVILY_API_KEY not set in environment."}
+    
+    try:
+        client = TavilyClient(api_key=api_key)
+        response = client.search(query, max_results=max_results)
+        # Extract relevant fields for the agent
+        results = []
+        for r in response.get("results", []):
+            results.append({
+                "title": r.get("title"),
+                "url": r.get("url"),
+                "content": r.get("content"),
+                "score": r.get("score")
+            })
+        return {"query": query, "results": results, "count": len(results)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def http_request(url: str, method: str = "GET", data: str = None, headers: dict = None) -> dict:
     if method is None:
         method = "GET"
@@ -364,4 +392,5 @@ TOOL_DISPATCH = {
     "list_files": list_files,
     "ask_human": ask_human,
     "request_approval": request_approval,
+    "web_search":web_search,
 }

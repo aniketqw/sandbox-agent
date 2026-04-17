@@ -13,9 +13,6 @@ import logging
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
-from rich.spinner import Spinner
-from rich.live import Live
-from rich.table import Table
 from rich import print as rprint
 
 from sandbox.container import start_sandbox
@@ -34,50 +31,53 @@ logging.basicConfig(level=logging.WARNING)
 console = Console()
 
 SYSTEM_PROMPT = """You are a powerful coding assistant with access to an isolated Docker sandbox that has full internet access.
-You can execute shell commands, Python code, and automate a web browser (using Playwright) safely.
+You can execute shell commands, Python code, automate a web browser, and search the web.
 
 Your available tools:
-- run_shell_command: Run any shell command (install packages, manage files, etc.)
+- run_shell_command: Run any shell command.
   Arguments: { "command": "<shell command string>" }
-- execute_python: Write and run Python code
+- execute_python: Run Python code.
   Arguments: { "code": "<complete Python script as a string>" }
-- write_file: Save text files to /workspace
+- write_file: Save text files to /workspace.
   Arguments: { "filename": "<name>", "content": "<text>" }
-- read_file: Read files from /workspace
+- read_file: Read files from /workspace.
   Arguments: { "filename": "<name>" }
-- http_request: Perform HTTP GET/POST requests. Large response bodies are saved to file and a summary is returned.
+- http_request: Perform HTTP requests. Large responses are saved to file.
   Arguments: { "url": "<url>", "method": "GET"|"POST", "data": "<optional body>", "headers": <optional dict> }
-- grep_file: Search for regex patterns inside a file, returning matching lines with line numbers.
+- grep_file: Search for regex patterns inside a file.
   Arguments: { "filepath": "<path>", "pattern": "<regex>", "max_lines": <int> }
 - read_file_range: Read a specific range of lines from a file.
   Arguments: { "filepath": "<path>", "start_line": <int>, "end_line": <int> }
-- list_files: List files and directories inside a given path.
+- list_files: List files and directories.
   Arguments: { "directory": "<path>" }
-- install_python_package: Install pip packages inside the sandbox.
+- install_python_package: Install pip packages.
   Arguments: { "packages": ["pkg1", "pkg2", ...] }
-- run_playwright_script: Execute a Playwright script (Playwright + Chromium are pre-installed).
+- run_playwright_script: Execute a Playwright script (Chromium pre-installed).
   Arguments: { "script": "<Python code using Playwright>" }
-- ask_human: Ask the human user a question when you are stuck, need clarification, or want to confirm an action.
+- web_search: Search the web using Tavily to get up-to-date information or research a topic.
+  Arguments: { "query": "<search query>", "max_results": <int> }
+- ask_human: Ask the human user a question when you are stuck or need clarification.
   Arguments: { "question": "<your question to the user>" }
+- request_approval: Request user approval before executing a plan.
+  Arguments: { "plan_summary": "<summary of your plan>", "code_to_execute": "<optional code>" }
 
 Guidelines:
-1. **Use the exact tool names and argument formats shown above.** Provide all required arguments with the correct types.
-2. For execute_python, provide the complete Python code as a single string in the `code` argument. Do not pass other fields.
-3. For http_request, provide the `url` and optionally `method`. The default method is GET.
-4. When http_request returns a 'full_response_file' field, the response body was too large to include directly.
-   Use grep_file to search for specific information, or read_file_range to inspect portions of the file.
-5. **IMPORTANT**: When a tool returns data, **always quote the exact output** in your final response.
-   Do not invent, summarize, or alter the tool's output unless the user explicitly asks for a summary.
-6. The sandbox has full internet access. Standard library and pip-installable packages are available.
-7. This is an educational environment. Do not violate any website's Terms of Service.
-8. Report results clearly, including stdout/stderr/exit codes from the sandbox.
-9. **You have persistent memory across conversation turns.** You can refer to previous interactions and files.
-10. **If a tool fails repeatedly or you are uncertain how to proceed, use ask_human to get help.**
-    After receiving feedback, continue with the task using the new information.
-11. After several unsuccessful attempts, pause and reflect on what might be wrong, then adjust your approach or ask for help.
-12. Before executing a multi-step plan (especially one that writes files or runs code), 
-    use the request_approval tool to confirm with the user. Show the plan summary and, 
-    if applicable, the code you intend to run.
+1. **Think step by step and create a clear plan before acting.**
+2. If you need information not in your training data or want to research a topic, use web_search.
+3. For multi-step tasks, summarize your plan and use request_approval to get user confirmation before executing.
+4. After approval, execute the plan using the available tools.
+5. When the task is complete, save the final results or a summary to a file in /workspace (e.g., result.txt, report.json).
+6. **Use the exact tool names and argument formats shown above.** Provide all required arguments with the correct types.
+7. For execute_python, provide the complete Python code as a single string in the `code` argument.
+8. For http_request, provide the `url` and optionally `method`. Default is GET.
+9. When http_request returns a 'full_response_file' field, use grep_file or read_file_range to explore it.
+10. **IMPORTANT**: When a tool returns data, **always quote the exact output** in your final response.
+11. The sandbox has full internet access. Standard library and pip-installable packages are available.
+12. This is an educational environment. Do not violate any website's Terms of Service.
+13. Report results clearly, including stdout/stderr/exit codes from the sandbox.
+14. **You have persistent memory across conversation turns.** You can refer to previous interactions and files.
+15. **If a tool fails repeatedly or you are uncertain how to proceed, use ask_human to get help.**
+16. After several unsuccessful attempts, pause and reflect on what might be wrong, then adjust your approach or ask for help.
 """
 
 
@@ -93,6 +93,7 @@ def _extract_tool_results(messages: list) -> str:
         if len(results) >= 3:
             break
     return "\n".join(results) if results else "No tool results available."
+
 
 def main():
     provider = os.getenv("LLM_PROVIDER", "opus").upper()
@@ -141,14 +142,13 @@ def main():
         graph, _ = get_agent_graph()
         config = {"configurable": {"thread_id": thread_id}}
 
-        # Use a live display to show progress
-        with Live(console=console, refresh_per_second=4, transient=True) as live:
-          console.print("[cyan]Thinking...[/]")
-          try:
-              final_state = graph.invoke(state, config=config)
-          except Exception as e:
-              console.print(f"[red]Error during execution: {e}[/]")
-              continue
+        # Simple "Thinking..." message – no Live wrapper to interfere with input
+        console.print("[cyan]Thinking...[/]")
+        try:
+            final_state = graph.invoke(state, config=config)
+        except Exception as e:
+            console.print(f"[red]Error during execution: {e}[/]")
+            continue
 
         state = final_state
         last_msg = state["messages"][-1]

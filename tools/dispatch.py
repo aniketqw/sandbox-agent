@@ -11,6 +11,7 @@ from tools.implementations import (
     read_file_range,
     list_files,
     ask_human,
+    web_search,
 )
 
 TOOL_DISPATCH = {
@@ -25,4 +26,5 @@ TOOL_DISPATCH = {
     "read_file_range": read_file_range,
     "list_files": list_files,
     "ask_human": ask_human,
+    "web_search": web_search,
 }

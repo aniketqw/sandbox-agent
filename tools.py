@@ -27,37 +27,43 @@ def http_request(url: str, method: str = "GET", data: str = None, headers: dict 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     response_file = os.path.join(HTTP_RESPONSE_DIR, f"resp_{timestamp}.json")
 
-    script = f"""
-import urllib.request
-import urllib.parse
-import json
-
-url = {json.dumps(url)}
-method = {json.dumps(method)}
-data = {json.dumps(data)}
-headers = {json.dumps(headers) if headers else 'None'}
-
-req = urllib.request.Request(url, method=method)
-if headers:
-    for k, v in headers.items():
-        req.add_header(k, v)
-if data and method == "POST":
-    req.data = data.encode('utf-8')
-
-try:
-    with urllib.request.urlopen(req) as response:
-        status = response.status
-        resp_headers = dict(response.headers)
-        body = response.read().decode('utf-8', errors='replace')
-        output = {{"status": status, "headers": resp_headers, "body": body}}
-        with open("{response_file}", "w") as f:
-            json.dump(output, f)
-        print(json.dumps(output))
-except Exception as e:
-    print(json.dumps({{"error": str(e)}}))
-"""
+    # Build the Python script as a multi-line string (no heredoc variable issues)
+    script_lines = [
+        "import urllib.request",
+        "import urllib.parse",
+        "import json",
+        f"url = {json.dumps(url)}",
+        f"method = {json.dumps(method)}",
+        f"data = {json.dumps(data)}",
+        f"headers = {json.dumps(headers) if headers else 'None'}",
+        "",
+        "req = urllib.request.Request(url, method=method)",
+        "if headers:",
+        "    for k, v in headers.items():",
+        "        req.add_header(k, v)",
+        "if data and method == 'POST':",
+        "    req.data = data.encode('utf-8')",
+        "",
+        "try:",
+        "    with urllib.request.urlopen(req) as response:",
+        "        status = response.status",
+        "        resp_headers = dict(response.headers)",
+        "        body = response.read().decode('utf-8', errors='replace')",
+        "        output = {'status': status, 'headers': resp_headers, 'body': body}",
+        f"        with open('{response_file}', 'w') as f:",
+        "            json.dump(output, f)",
+        "        print(json.dumps(output))",
+        "except Exception as e:",
+        "    print(json.dumps({'error': str(e)}))",
+    ]
+    
+    script = "\n".join(script_lines)
     temp_file = "/tmp/http_req.py"
-    container.exec_run(cmd=["sh", "-c", f"cat > {temp_file} << 'EOF'\n{script}\nEOF"])
+    
+    # Write script using printf to avoid heredoc issues
+    escaped_script = script.replace("'", "'\\''")
+    write_cmd = f"printf '%s' '{escaped_script}' > {temp_file}"
+    container.exec_run(cmd=["sh", "-c", write_cmd])
 
     result = container.exec_run(cmd=["python", temp_file], demux=True)
 
@@ -65,9 +71,11 @@ except Exception as e:
     stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
 
     print(f"[Tool] HTTP stdout preview: {stdout[:200]}...")
+    if stderr:
+        print(f"[Tool] HTTP stderr: {stderr[:200]}...")
 
     try:
-        parsed = json.loads(stdout) if stdout else {"error": "No output"}
+        parsed = json.loads(stdout) if stdout else {"error": "No output", "stderr": stderr}
     except json.JSONDecodeError:
         parsed = {"error": "Failed to parse JSON", "raw_stdout": stdout, "stderr": stderr}
 
@@ -83,7 +91,6 @@ except Exception as e:
         }
     else:
         return parsed
-
 
 def install_python_package(packages: list) -> dict:
     """

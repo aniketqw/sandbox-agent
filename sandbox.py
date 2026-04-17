@@ -7,7 +7,7 @@ import docker
 import os
 import atexit
 
-WORKSPACE_HOST = os.path.expanduser("~/agent_workspace")
+WORKSPACE_HOST = os.path.join(os.path.dirname(__file__), "agent_workspace")
 WORKSPACE_CONTAINER = "/workspace"
 IMAGE = "mcr.microsoft.com/playwright/python:v1.58.0-noble"
 CONTAINER_NAME = "sandbox_agent_env"

@@ -119,7 +119,9 @@ def main():
     state = {
         "messages": [SystemMessage(content=SYSTEM_PROMPT)],
         "step_count": 0,
-        "reflection_count": 0
+        "reflection_count": 0,
+        "plan": None,
+        "plan_approved": False
     }
 
     while True:

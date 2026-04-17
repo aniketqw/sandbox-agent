@@ -4,6 +4,88 @@ These are passed to the LLM in the `tools` array so it knows what to call.
 """
 
 TOOLS = [
+    # Add these tool definitions to the TOOLS list
+
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_file",
+            "description": (
+                "Search for lines matching a regular expression pattern inside a file. "
+                "Useful for extracting specific information from large response files."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Full path to the file to search."
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regular expression pattern to match (e.g., 'error', 'price.*\\\\d+')."
+                    },
+                    "max_lines": {
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Maximum number of matching lines to return."
+                    }
+                },
+                "required": ["filepath", "pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file_range",
+            "description": (
+                "Read a specific range of lines from a file. "
+                "Use when you only need a portion of a large file."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Full path to the file."
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "First line number to read (1-indexed)."
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "default": 100,
+                        "description": "Last line number to read (inclusive)."
+                    }
+                },
+                "required": ["filepath"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": (
+                "List files and directories in a given path inside the sandbox. "
+                "Useful for exploring the workspace or finding saved response files."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "directory": {
+                        "type": "string",
+                        "default": "/workspace",
+                        "description": "Directory path to list."
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {

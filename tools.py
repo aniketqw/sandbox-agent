@@ -5,20 +5,28 @@ Each function maps 1-to-1 with a JSON schema defined in schemas.py.
 
 import os
 import json
+from datetime import datetime
 from sandbox import get_container, WORKSPACE_CONTAINER
 
 TEMP_SCRIPT = os.path.join(WORKSPACE_CONTAINER, "agent_temp.py")
+HTTP_RESPONSE_DIR = os.path.join(WORKSPACE_CONTAINER, "http_responses")
 
 
 def http_request(url: str, method: str = "GET", data: str = None, headers: dict = None) -> dict:
     """
     Perform an HTTP request inside the sandbox using urllib (built-in).
-    Returns a clear dict with status, headers, and body.
+    Large response bodies (>2000 chars) are saved to a file and a summary is returned.
     """
     container = get_container()
     print(f"\n[Tool] http_request: {method} {url}")
 
-    # Build a self-contained Python script that uses urllib
+    # Ensure the response directory exists
+    container.exec_run(cmd=["sh", "-c", f"mkdir -p {HTTP_RESPONSE_DIR}"])
+
+    # Generate a unique filename for this response
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    response_file = os.path.join(HTTP_RESPONSE_DIR, f"resp_{timestamp}.json")
+
     script = f"""
 import urllib.request
 import urllib.parse
@@ -41,7 +49,10 @@ try:
         status = response.status
         resp_headers = dict(response.headers)
         body = response.read().decode('utf-8', errors='replace')
-        print(json.dumps({{"status": status, "headers": resp_headers, "body": body}}))
+        output = {{"status": status, "headers": resp_headers, "body": body}}
+        with open("{response_file}", "w") as f:
+            json.dump(output, f)
+        print(json.dumps(output))
 except Exception as e:
     print(json.dumps({{"error": str(e)}}))
 """
@@ -53,19 +64,25 @@ except Exception as e:
     stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
     stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
 
-    print(f"[Tool] HTTP stdout: {stdout[:200]}...")  # preview
+    print(f"[Tool] HTTP stdout preview: {stdout[:200]}...")
 
     try:
         parsed = json.loads(stdout) if stdout else {"error": "No output"}
     except json.JSONDecodeError:
         parsed = {"error": "Failed to parse JSON", "raw_stdout": stdout, "stderr": stderr}
 
-    # For better LLM consumption, if body is huge, truncate it
+    # If body is large, return a summary and point to the saved file
     if "body" in parsed and len(parsed.get("body", "")) > 2000:
-        parsed["body"] = parsed["body"][:2000] + "... [truncated]"
-        parsed["note"] = "Response body truncated to 2000 characters."
-
-    return parsed
+        body_preview = parsed["body"][:500] + "... [truncated]"
+        return {
+            "status": parsed.get("status"),
+            "headers": parsed.get("headers"),
+            "body_preview": body_preview,
+            "full_response_file": response_file,
+            "note": f"Response body too large ({len(parsed['body'])} chars). Full response saved to {response_file}. Use grep_file or read_file_range to explore it."
+        }
+    else:
+        return parsed
 
 
 def install_python_package(packages: list) -> dict:
@@ -239,6 +256,68 @@ def read_file(filename: str) -> dict:
     return {"content": content}
 
 
+def grep_file(filepath: str, pattern: str, max_lines: int = 50) -> dict:
+    """
+    Search for lines matching a regex pattern in a file.
+    Returns matching lines with line numbers.
+    """
+    container = get_container()
+    print(f"\n[Tool] grep_file: '{pattern}' in {filepath}")
+
+    cmd = f"grep -n -E '{pattern}' {filepath} | head -n {max_lines}"
+    result = container.exec_run(cmd=["sh", "-c", cmd], demux=True)
+
+    stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
+    stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
+
+    if result.exit_code == 1 and not stdout:
+        return {"matches": [], "message": "No matches found."}
+    elif result.exit_code != 0:
+        return {"error": stderr or "grep command failed"}
+
+    matches = stdout.strip().split("\n") if stdout.strip() else []
+    return {"matches": matches, "count": len(matches)}
+
+
+def read_file_range(filepath: str, start_line: int = 1, end_line: int = 100) -> dict:
+    """
+    Read a specific range of lines from a file.
+    """
+    container = get_container()
+    print(f"\n[Tool] read_file_range: {filepath} lines {start_line}-{end_line}")
+
+    cmd = f"sed -n '{start_line},{end_line}p' {filepath}"
+    result = container.exec_run(cmd=["sh", "-c", cmd], demux=True)
+
+    stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
+    stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
+
+    if result.exit_code != 0:
+        return {"error": stderr or "Failed to read file"}
+
+    return {"content": stdout, "start_line": start_line, "end_line": end_line}
+
+
+def list_files(directory: str = WORKSPACE_CONTAINER) -> dict:
+    """
+    List files and directories in a given path inside the sandbox.
+    """
+    container = get_container()
+    print(f"\n[Tool] list_files: {directory}")
+
+    cmd = f"ls -la {directory}"
+    result = container.exec_run(cmd=["sh", "-c", cmd], demux=True)
+
+    stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
+    stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
+
+    return {
+        "stdout": stdout,
+        "stderr": stderr,
+        "exit_code": result.exit_code
+    }
+
+
 # Dispatch table
 TOOL_DISPATCH = {
     "run_shell_command": run_shell_command,
@@ -248,4 +327,7 @@ TOOL_DISPATCH = {
     "http_request": http_request,
     "install_python_package": install_python_package,
     "run_playwright_script": run_playwright_script,
+    "grep_file": grep_file,
+    "read_file_range": read_file_range,
+    "list_files": list_files,
 }

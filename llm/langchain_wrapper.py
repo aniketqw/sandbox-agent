@@ -1,6 +1,7 @@
 # llm/langchain_wrapper.py
 import json
 import logging
+import re
 from typing import Any, List, Optional, Iterator
 
 from langchain_core.language_models import BaseChatModel
@@ -13,24 +14,20 @@ from pydantic import Field, PrivateAttr
 
 from llm.client import AnthropicProxyClient
 from tools.langchain_adapter import _get_tool_schema
-import re
-# Use a logger with higher level to avoid cluttering the console
+
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)   # Only show warnings and errors
+logger.setLevel(logging.WARNING)
 
 
 def _parse_pseudo_tool_calls(content: str) -> list:
     """
-    Extract tool calls from text like:
-    [TOOL_CALL]
-    {tool => "http_request", args => { --method "GET" --url "https://..." }}
-    [/TOOL_CALL]
+    Extract tool calls from various text patterns that LLMs might produce.
     """
-    pattern = r"\[TOOL_CALL\]\s*\{tool\s*=>\s*\"([^\"]+)\",\s*args\s*=>\s*\{([^}]+)\}\s*\}\s*\[/TOOL_CALL\]"
-    matches = re.findall(pattern, content, re.DOTALL)
     tool_calls = []
-    for tool_name, args_str in matches:
-        # Parse args like: --method "GET" --url "https://..."
+
+    # Pattern 1: [TOOL_CALL]{tool => "name", args => {...}}[/TOOL_CALL]
+    pattern1 = r"\[TOOL_CALL\]\s*\{tool\s*=>\s*\"([^\"]+)\",\s*args\s*=>\s*\{([^}]+)\}\s*\}\s*\[/TOOL_CALL\]"
+    for tool_name, args_str in re.findall(pattern1, content, re.DOTALL):
         args = {}
         arg_pattern = r"--(\w+)\s+\"([^\"]*)\""
         for k, v in re.findall(arg_pattern, args_str):
@@ -41,7 +38,76 @@ def _parse_pseudo_tool_calls(content: str) -> list:
             "args": args,
             "type": "tool_call",
         })
+
+    # Pattern 2: %tool_name followed by arguments/code
+    pattern2 = r"%(\w+)\s+(.*?)(?=\n%|\n\n|$)"
+    for tool_name, raw_args in re.findall(pattern2, content, re.DOTALL):
+        if tool_name in ["fetch", "http_request"]:
+            url_match = re.search(r"(https?://[^\s]+)", raw_args)
+            if url_match:
+                tool_calls.append({
+                    "id": f"pseudo_http_{len(tool_calls)}",
+                    "name": "http_request",
+                    "args": {"url": url_match.group(1), "method": "GET"},
+                    "type": "tool_call",
+                })
+        elif tool_name == "execute_python":
+            code_match = re.search(r"```python\s*(.*?)```", raw_args, re.DOTALL)
+            if code_match:
+                tool_calls.append({
+                    "id": f"pseudo_python_{len(tool_calls)}",
+                    "name": "execute_python",
+                    "args": {"code": code_match.group(1).strip()},
+                    "type": "tool_call",
+                })
+        elif tool_name == "read_file":
+            path_match = re.search(r"([/\w\.-]+)", raw_args)
+            if path_match:
+                fname = path_match.group(1).replace("/workspace/", "")
+                tool_calls.append({
+                    "id": f"pseudo_read_{len(tool_calls)}",
+                    "name": "read_file",
+                    "args": {"filename": fname},
+                    "type": "tool_call",
+                })
+
+    # Pattern 3: <tool_name>content</tool_name>
+    pattern3 = r"<(\w+)>(.*?)</\1>"
+    for tool_name, inner in re.findall(pattern3, content, re.DOTALL):
+        if tool_name in ["execute_python", "code"]:
+            tool_calls.append({
+                "id": f"pseudo_python_{len(tool_calls)}",
+                "name": "execute_python",
+                "args": {"code": inner.strip()},
+                "type": "tool_call",
+            })
+        elif tool_name == "file_read":
+            path_match = re.search(r"([/\w\.-]+)", inner)
+            if path_match:
+                fname = path_match.group(1).replace("/workspace/", "")
+                tool_calls.append({
+                    "id": f"pseudo_read_{len(tool_calls)}",
+                    "name": "read_file",
+                    "args": {"filename": fname},
+                    "type": "tool_call",
+                })
+
+    # Pattern 4: JSON blocks like {"tool": "http_request", "args": {...}}
+    pattern4 = r"\{[^{}]*\"tool\"\s*:\s*\"(\w+)\"[^{}]*\"args\"\s*:\s*(\{[^{}]+\})[^{}]*\}"
+    for tool_name, args_json in re.findall(pattern4, content):
+        try:
+            args = json.loads(args_json)
+            tool_calls.append({
+                "id": f"pseudo_json_{tool_name}_{len(tool_calls)}",
+                "name": tool_name,
+                "args": args,
+                "type": "tool_call",
+            })
+        except:
+            pass
+
     return tool_calls
+
 
 class AnthropicProxyChatModel(BaseChatModel):
     client: AnthropicProxyClient = Field(..., exclude=True)
@@ -60,7 +126,6 @@ class AnthropicProxyChatModel(BaseChatModel):
         run_manager=None,
         **kwargs,
     ) -> ChatResult:
-        # Convert LangChain messages to the format expected by the proxy
         converted_messages = []
         for msg in messages:
             if isinstance(msg, SystemMessage):
@@ -97,7 +162,6 @@ class AnthropicProxyChatModel(BaseChatModel):
             else:
                 raise ValueError(f"Unsupported message type: {type(msg)}")
 
-        # Prepare tools in Anthropic format
         tools = self._bound_tools or kwargs.get("tools")
         anthropic_tools = None
         if tools:
@@ -110,24 +174,23 @@ class AnthropicProxyChatModel(BaseChatModel):
                     "input_schema": schema,
                 })
 
-        # Log the tools payload only at DEBUG level (won't show by default)
         logger.debug("Anthropic tools:\n%s", json.dumps(anthropic_tools, indent=2))
 
         response = self.client.chat.completions.create(
-        model=self.model,
-        messages=converted_messages,
-        tools=anthropic_tools,
-        tool_choice="auto" if anthropic_tools else None,
-        max_tokens=self.max_tokens,
-        temperature=self.temperature,
-)
+            model=self.model,
+            messages=converted_messages,
+            tools=anthropic_tools,
+            tool_choice="auto" if anthropic_tools else None,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+        )
 
         logger.debug("Raw proxy response: %s", response)
 
         ai_message = response.choices[0].message
         content = ai_message.content or ""
 
-        # Parse tool calls from the response
+        # Parse structured tool calls from the response
         lc_tool_calls = []
         if hasattr(ai_message, "tool_calls") and ai_message.tool_calls:
             for tc in ai_message.tool_calls:
@@ -142,33 +205,31 @@ class AnthropicProxyChatModel(BaseChatModel):
                     "type": "tool_call",
                 })
 
+        # Fallback: try to parse pseudo‑calls from content
+        if not lc_tool_calls and content:
+            pseudo_calls = _parse_pseudo_tool_calls(content)
+            if pseudo_calls:
+                logger.info("Extracted pseudo tool calls: %s", pseudo_calls)
+                lc_tool_calls = pseudo_calls
+                # Clean up the content by removing the pseudo‑syntax
+                content = re.sub(r"\[TOOL_CALL\].*?\[/TOOL_CALL\]", "", content, flags=re.DOTALL)
+                content = re.sub(r"%\w+.*?(?=\n\n|$)", "", content, flags=re.DOTALL)
+                content = re.sub(r"<[^>]+>.*?</[^>]+>", "", content, flags=re.DOTALL)
+                content = content.strip()
+
         if lc_tool_calls:
             message = AIMessage(content=content, tool_calls=lc_tool_calls)
         else:
             message = AIMessage(content=content)
-        # If no structured tool calls, try parsing pseudo-calls from content
-        if not lc_tool_calls and content:
-            pseudo_calls = _parse_pseudo_tool_calls(content)
-            if pseudo_calls:
-                logger.info("Extracted pseudo tool calls from text: %s", pseudo_calls)
-                lc_tool_calls = pseudo_calls
-                # Remove the pseudo-call text from the displayed content
-                content = re.sub(r"\[TOOL_CALL\].*?\[/TOOL_CALL\]", "", content, flags=re.DOTALL).strip()
+
         if not content and not lc_tool_calls:
-            logger.warning("LLM returned empty response (no content and no tool calls).")
+            logger.warning("LLM returned empty response.")
 
         generation = ChatGeneration(message=message)
         return ChatResult(generations=[generation])
 
-    def _stream(
-        self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager=None,
-        **kwargs,
-    ) -> Iterator[ChatGeneration]:
-        # Fallback to non-streaming
-        result = self._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+    def _stream(self, *args, **kwargs) -> Iterator[ChatGeneration]:
+        result = self._generate(*args, **kwargs)
         yield result.generations[0]
 
     def bind_tools(self, tools: List[BaseTool], **kwargs) -> "AnthropicProxyChatModel":

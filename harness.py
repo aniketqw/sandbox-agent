@@ -75,6 +75,9 @@ Guidelines:
 10. **If a tool fails repeatedly or you are uncertain how to proceed, use ask_human to get help.**
     After receiving feedback, continue with the task using the new information.
 11. After several unsuccessful attempts, pause and reflect on what might be wrong, then adjust your approach or ask for help.
+12. Before executing a multi-step plan (especially one that writes files or runs code), 
+    use the request_approval tool to confirm with the user. Show the plan summary and, 
+    if applicable, the code you intend to run.
 """
 
 
@@ -140,12 +143,12 @@ def main():
 
         # Use a live display to show progress
         with Live(console=console, refresh_per_second=4, transient=True) as live:
-            live.update(Spinner("dots", text="[cyan]Thinking...[/]"))
-            try:
-                final_state = graph.invoke(state, config=config)
-            except Exception as e:
-                console.print(f"[red]Error during execution: {e}[/]")
-                continue
+          console.print("[cyan]Thinking...[/]")
+          try:
+              final_state = graph.invoke(state, config=config)
+          except Exception as e:
+              console.print(f"[red]Error during execution: {e}[/]")
+              continue
 
         state = final_state
         last_msg = state["messages"][-1]

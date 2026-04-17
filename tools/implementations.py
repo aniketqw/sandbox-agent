@@ -16,8 +16,39 @@ def ask_human(question: str) -> dict:
     print(f"\n[Agent needs your input] {question}")
     response = input("Your answer: ").strip()
     return {"answer": response}
+def request_approval(plan_summary: str, code_to_execute: str = "") -> dict:
+    """
+    Ask the human to approve a plan before execution.
+    Returns {'approved': True/False, 'feedback': '...'}
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.syntax import Syntax
+    console = Console()
 
+    console.print()
+    console.print(Panel(
+        f"[bold yellow]📋 Agent wants to execute the following plan:[/]\n\n{plan_summary}",
+        title="Approval Request",
+        border_style="yellow"
+    ))
+    if code_to_execute:
+        console.print(Panel(
+            Syntax(code_to_execute, "python", theme="monokai", line_numbers=True),
+            title="Code to execute",
+            border_style="yellow"
+        ))
+
+    answer = console.input("[bold green]Approve? (y/n): [/]").strip().lower()
+    if answer in ("y", "yes"):
+        feedback = console.input("[bold]Optional feedback: [/]") or "Approved."
+        return {"approved": True, "feedback": feedback}
+    else:
+        feedback = console.input("[bold]What should be changed? [/]") or "Not approved."
+        return {"approved": False, "feedback": feedback}
 def http_request(url: str, method: str = "GET", data: str = None, headers: dict = None) -> dict:
+    if method is None:
+        method = "GET"
     container = get_container()
     print(f"\n[Tool] http_request: {method} {url}")
 
@@ -331,4 +362,6 @@ TOOL_DISPATCH = {
     "grep_file": grep_file,
     "read_file_range": read_file_range,
     "list_files": list_files,
+    "ask_human": ask_human,
+    "request_approval": request_approval,
 }

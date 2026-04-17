@@ -24,7 +24,6 @@ class AnthropicProxyClient:
                        tool_choice: Optional[str] = None,
                        max_tokens: int = 1024,
                        temperature: float = 0.7) -> Any:
-                # Convert OpenAI messages to Anthropic format
                 system_prompt = ""
                 anthropic_messages = []
 
@@ -36,7 +35,6 @@ class AnthropicProxyClient:
                     elif role == "user":
                         anthropic_messages.append({"role": "user", "content": content})
                     elif role == "assistant":
-                        # Handle tool calls in assistant messages
                         if "tool_calls" in msg:
                             tool_calls_content = []
                             for tc in msg["tool_calls"]:
@@ -53,7 +51,6 @@ class AnthropicProxyClient:
                         else:
                             anthropic_messages.append({"role": "assistant", "content": content})
                     elif role == "tool":
-                        # Tool response
                         tool_call_id = msg.get("tool_call_id")
                         anthropic_messages.append({
                             "role": "user",
@@ -64,7 +61,6 @@ class AnthropicProxyClient:
                             }]
                         })
 
-                # Convert OpenAI tools to Anthropic tools
                 anthropic_tools = None
                 if tools:
                     anthropic_tools = []
@@ -85,7 +81,6 @@ class AnthropicProxyClient:
                 }
                 if system_prompt:
                     payload["system"] = system_prompt
-                            # Inside create() method, after building payload:
                 if anthropic_tools:
                     payload["tools"] = anthropic_tools
                     if tool_choice:
@@ -102,12 +97,9 @@ class AnthropicProxyClient:
                                      json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-
-                # Convert Anthropic response back to OpenAI format for the harness
                 return self._convert_response(data)
 
             def _convert_response(self, data: Dict) -> Any:
-                """Convert Anthropic response to an object that mimics OpenAI's response structure."""
                 class Choice:
                     def __init__(self, message):
                         self.message = message
@@ -116,7 +108,6 @@ class AnthropicProxyClient:
                     def __init__(self, choices):
                         self.choices = choices
 
-                # Build assistant message with possible tool calls
                 content = ""
                 tool_calls = []
                 for block in data.get("content", []):
@@ -145,7 +136,6 @@ class AnthropicProxyClient:
         self.chat = self.Chat(self)
 
 
-# Minimal classes to emulate OpenAI's structure
 class FunctionCall:
     def __init__(self, name, arguments):
         self.name = name

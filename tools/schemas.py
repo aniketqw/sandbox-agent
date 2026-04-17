@@ -8,6 +8,30 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "request_approval",
+            "description": (
+                "Request user approval before executing a plan. "
+                "Use this when you have a multi-step plan and want confirmation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_summary": {
+                        "type": "string",
+                        "description": "A clear summary of what you intend to do."
+                    },
+                    "code_to_execute": {
+                        "type": "string",
+                        "description": "Optional: the code you plan to run."
+                    }
+                },
+                "required": ["plan_summary"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "ask_human",
             "description": "Ask the human user a question when you are stuck or need clarification.",
             "parameters": {

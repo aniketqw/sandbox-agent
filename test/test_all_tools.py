@@ -4,8 +4,6 @@ Comprehensive test suite for the sandbox agent tools.
 Run this script from the PROJECT ROOT directory:
     python test/test_all_tools.py
 
-Or run from anywhere with the proper PYTHONPATH set.
-
 It will start the sandbox, execute a series of tests for each tool,
 and write detailed logs to a timestamped file inside the test/ folder.
 """
@@ -19,20 +17,16 @@ from datetime import datetime
 from pathlib import Path
 
 # --- PATH SETUP ---
-# Add the parent directory (project root) to sys.path so we can import sandbox and tools
 PROJECT_ROOT = Path(__file__).parent.parent.absolute()
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Import the sandbox and tool modules
 from sandbox import start_sandbox, get_container, WORKSPACE_CONTAINER, WORKSPACE_HOST
 import tools
 
-# Configure logging - log file will be created in the test/ directory
 TEST_DIR = Path(__file__).parent.absolute()
 LOG_FILE = TEST_DIR / f"test_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
 def log(message: str, level: str = "INFO"):
-    """Write message to both console and log file."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{timestamp}] [{level}] {message}"
     print(formatted)
@@ -40,7 +34,6 @@ def log(message: str, level: str = "INFO"):
         f.write(formatted + "\n")
 
 def log_separator(title: str = ""):
-    """Print a visual separator."""
     sep = "=" * 80
     if title:
         log(sep)
@@ -50,10 +43,8 @@ def log_separator(title: str = ""):
         log(sep)
 
 def run_test(name: str, func, *args, **kwargs):
-    """Execute a test function and log the result."""
     log_separator(f"TEST: {name}")
     log(f"Function: {func.__name__}")
-    # Truncate long arguments for logging
     args_str = str(args)[:500] + "..." if len(str(args)) > 500 else str(args)
     kwargs_str = str(kwargs)[:500] + "..." if len(str(kwargs)) > 500 else str(kwargs)
     log(f"Arguments: args={args_str}, kwargs={kwargs_str}")
@@ -63,7 +54,6 @@ def run_test(name: str, func, *args, **kwargs):
         elapsed = time.time() - start_time
         log(f"Elapsed: {elapsed:.3f}s")
         log("Result:")
-        # Format result for logging, handle large strings
         result_str = json.dumps(result, indent=2, default=str)
         if len(result_str) > 2000:
             result_str = result_str[:2000] + "\n... [truncated for log]"
@@ -77,17 +67,13 @@ def run_test(name: str, func, *args, **kwargs):
         return {"error": str(e), "traceback": traceback.format_exc()}
 
 def verify_workspace():
-    """Verify the host workspace directory exists and is writable."""
     log_separator("ENVIRONMENT CHECK")
     log(f"Project root: {PROJECT_ROOT}")
     log(f"Test directory: {TEST_DIR}")
     log(f"Log file: {LOG_FILE}")
     log(f"Workspace host path: {WORKSPACE_HOST}")
-    
-    # Check if workspace directory exists or can be created
     if os.path.exists(WORKSPACE_HOST):
         log(f"Workspace directory exists: {WORKSPACE_HOST}")
-        # Check writability
         if os.access(WORKSPACE_HOST, os.W_OK):
             log("Workspace directory is writable")
         else:
@@ -95,14 +81,37 @@ def verify_workspace():
     else:
         log(f"Workspace directory does not exist yet (will be created by sandbox)")
 
+def ensure_playwright():
+    """Check if Playwright is installed; if not, attempt to install it."""
+    log_separator("PRE-FLIGHT: Playwright Check")
+    result = tools.run_shell_command("python -c 'import playwright' 2>/dev/null && echo 'OK' || echo 'MISSING'")
+    if "OK" in result.get("stdout", ""):
+        log("Playwright is already installed.")
+        return True
+    else:
+        log("Playwright not found. Attempting automatic installation...", level="WARNING")
+        log("This may take a few minutes.")
+        # Install playwright and chromium
+        inst = tools.install_python_package(["playwright"])
+        if not inst.get("success"):
+            log("Failed to install playwright package.", level="ERROR")
+            return False
+        tools.run_shell_command("playwright install chromium")
+        # Verify again
+        result2 = tools.run_shell_command("python -c 'import playwright' && echo 'OK'")
+        if "OK" in result2.get("stdout", ""):
+            log("Playwright installed successfully.")
+            return True
+        else:
+            log("Playwright installation verification failed.", level="ERROR")
+            return False
+
 def main():
     log_separator("SANDBOX AGENT TOOL TEST SUITE")
     log(f"Start time: {datetime.now().isoformat()}")
-    
-    # Environment verification
     verify_workspace()
 
-    # Start the sandbox container
+    # Start sandbox
     log_separator("STARTING SANDBOX")
     try:
         container = start_sandbox()
@@ -113,133 +122,86 @@ def main():
         log(traceback.format_exc(), level="FATAL")
         sys.exit(1)
 
-    # Give container a moment to be fully ready
     time.sleep(2)
-    
-    # Verify container is still running
     try:
         container.reload()
         log(f"Container running: {container.status}")
     except Exception as e:
         log(f"Container check failed: {e}", level="ERROR")
 
-    # Track test results summary
     test_summary = {"passed": 0, "failed": 0, "total": 0}
 
-    # -------------------- TEST CASES --------------------
-
-    # 1. Shell command: echo and python version
-    result = run_test(
-        "Shell Command - echo hello",
-        tools.run_shell_command,
-        "echo 'Hello from test suite!'"
-    )
+    # --- BASIC TOOLS ---
+    result = run_test("Shell Command - echo hello", tools.run_shell_command, "echo 'Hello from test suite!'")
     test_summary["total"] += 1
-    if "error" not in result:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    test_summary["passed" if "error" not in result else "failed"] += 1
 
-    result = run_test(
-        "Shell Command - Python version",
-        tools.run_shell_command,
-        "python --version"
-    )
+    result = run_test("Shell Command - Python version", tools.run_shell_command, "python --version")
     test_summary["total"] += 1
-    if "error" not in result:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    test_summary["passed" if "error" not in result else "failed"] += 1
 
-    # 2. Python execution: simple print and sum
-    result = run_test(
-        "Execute Python - print and sum",
-        tools.execute_python,
-        "print('Hello, Sandbox!')\nprint('Sum:', sum(range(1, 11)))"
-    )
+    result = run_test("Execute Python - print and sum", tools.execute_python,
+                      "print('Hello, Sandbox!')\nprint('Sum:', sum(range(1, 11)))")
     test_summary["total"] += 1
-    if "error" not in result and result.get("exit_code") == 0:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    test_summary["passed" if (not result.get("error") and result.get("exit_code") == 0) else "failed"] += 1
 
-    # 3. Write and read file
     test_filename = "test_agent_file.txt"
     test_content = "This is a test file created by the automated test suite."
-    result = run_test(
-        "Write File",
-        tools.write_file,
-        test_filename,
-        test_content
-    )
+    result = run_test("Write File", tools.write_file, test_filename, test_content)
     test_summary["total"] += 1
-    if "error" not in result and result.get("success"):
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    test_summary["passed" if (not result.get("error") and result.get("success")) else "failed"] += 1
 
-    result = run_test(
-        "Read File",
-        tools.read_file,
-        test_filename
-    )
+    result = run_test("Read File", tools.read_file, test_filename)
     test_summary["total"] += 1
-    if "error" not in result and result.get("content") == test_content:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    test_summary["passed" if (not result.get("error") and result.get("content") == test_content) else "failed"] += 1
 
-    # 4. HTTP request (small response)
-    result = run_test(
-        "HTTP Request - httpbin.org/json",
-        tools.http_request,
-        "https://httpbin.org/json",
-        method="GET"
-    )
+    # --- HTTP REQUESTS ---
+    # Debug: simple urllib test to ensure network works
+    run_test("DEBUG - Python urllib connectivity", tools.execute_python,
+             "import urllib.request; print(urllib.request.urlopen('https://httpbin.org/json').getcode())")
+
+    result = run_test("HTTP Request - httpbin.org/json", tools.http_request,
+                      "https://httpbin.org/json", method="GET")
     test_summary["total"] += 1
     if "error" not in result and "status" in result:
         test_summary["passed"] += 1
     else:
         test_summary["failed"] += 1
 
-    # 5. HTTP request (large response) - using jsonplaceholder photos
-    result_large = run_test(
-        "HTTP Request (large) - jsonplaceholder photos",
-        tools.http_request,
-        "https://jsonplaceholder.typicode.com/photos",
-        method="GET"
-    )
+    result_large = run_test("HTTP Request (large) - jsonplaceholder photos", tools.http_request,
+                            "https://jsonplaceholder.typicode.com/photos", method="GET")
     test_summary["total"] += 1
-    if "error" not in result_large:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    test_summary["passed" if "error" not in result_large else "failed"] += 1
 
-    # 6. Install Python package (emoji) and verify
-    result = run_test(
-        "Install Package - emoji",
-        tools.install_python_package,
-        ["emoji"]
-    )
+    # --- PACKAGE INSTALL & EMOJI ---
+    result = run_test("Install Package - emoji", tools.install_python_package, ["emoji"])
     test_summary["total"] += 1
-    if "error" not in result:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    test_summary["passed" if "error" not in result else "failed"] += 1
 
-    result = run_test(
-        "Execute Python with emoji",
-        tools.execute_python,
-        "import emoji\nprint(repr(emoji.emojize(':smile:')))"
-    )
+    # Emoji test with multiple fallback shortcodes
+    emoji_code = """
+import emoji
+# Try several known shortcodes
+for code in [':smile:', ':grinning_face:', ':smiley:', ':slightly_smiling_face:']:
+    converted = emoji.emojize(code)
+    if converted != code:
+        print(f'Success: {code} -> {repr(converted)}')
+        break
+else:
+    print('No emoji conversion worked; raw:', repr(emoji.emojize(':smile:')))
+"""
+    result = run_test("Execute Python with emoji", tools.execute_python, emoji_code)
     test_summary["total"] += 1
-    if "error" not in result and result.get("exit_code") == 0:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    # Consider pass if script runs without error, regardless of conversion success
+    test_summary["passed" if (not result.get("error") and result.get("exit_code") == 0) else "failed"] += 1
 
-    # 7. Playwright script: navigate to example.com
-    playwright_script = """
+    # --- PLAYWRIGHT ---
+    if not ensure_playwright():
+        log("Skipping Playwright tests because installation failed.", level="ERROR")
+        test_summary["total"] += 1
+        test_summary["failed"] += 1
+    else:
+        playwright_script = """
 import asyncio
 from playwright.async_api import async_playwright
 
@@ -254,97 +216,41 @@ async def main():
 
 asyncio.run(main())
 """
-    result = run_test(
-        "Playwright - navigate to example.com",
-        tools.run_playwright_script,
-        playwright_script
-    )
-    test_summary["total"] += 1
-    if "error" not in result and result.get("exit_code") == 0:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+        result = run_test("Playwright - navigate to example.com", tools.run_playwright_script, playwright_script)
+        test_summary["total"] += 1
+        test_summary["passed" if (not result.get("error") and result.get("exit_code") == 0) else "failed"] += 1
 
-    # 8. list_files - check workspace
-    result = run_test(
-        "List Files - /workspace",
-        tools.list_files,
-        "/workspace"
-    )
+    # --- FILE EXPLORATION TOOLS ---
+    result = run_test("List Files - /workspace", tools.list_files, "/workspace")
     test_summary["total"] += 1
-    if "error" not in result and result.get("exit_code") == 0:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    test_summary["passed" if (not result.get("error") and result.get("exit_code") == 0) else "failed"] += 1
 
-    # 9. grep_file - search in a file (use the test file we created)
-    result = run_test(
-        "grep_file - search 'test' in test file",
-        tools.grep_file,
-        os.path.join(WORKSPACE_CONTAINER, test_filename),
-        "test"
-    )
+    result = run_test("grep_file - search 'test' in test file", tools.grep_file,
+                      os.path.join(WORKSPACE_CONTAINER, test_filename), "test")
     test_summary["total"] += 1
-    if "error" not in result:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    test_summary["passed" if "error" not in result else "failed"] += 1
 
-    # 10. read_file_range - read lines from a file
-    result = run_test(
-        "read_file_range - first 2 lines of test file",
-        tools.read_file_range,
-        os.path.join(WORKSPACE_CONTAINER, test_filename),
-        1,
-        2
-    )
+    result = run_test("read_file_range - first 2 lines of test file", tools.read_file_range,
+                      os.path.join(WORKSPACE_CONTAINER, test_filename), 1, 2)
     test_summary["total"] += 1
-    if "error" not in result:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    test_summary["passed" if "error" not in result else "failed"] += 1
 
-    # 11. Check http_responses directory
-    result = run_test(
-        "List Files - /workspace/http_responses",
-        tools.list_files,
-        "/workspace/http_responses"
-    )
+    result = run_test("List Files - /workspace/http_responses", tools.list_files, "/workspace/http_responses")
     test_summary["total"] += 1
-    if "error" not in result:
-        test_summary["passed"] += 1
-    else:
-        test_summary["failed"] += 1
+    test_summary["passed" if "error" not in result else "failed"] += 1
 
-    # If large HTTP response was saved, demonstrate exploring it
+    # Explore large HTTP response if saved
     if result_large and "full_response_file" in result_large:
         large_file = result_large["full_response_file"]
         log(f"Large response saved to: {large_file}")
-        result = run_test(
-            "grep_file - search for 'title' in large response",
-            tools.grep_file,
-            large_file,
-            "title",
-            max_lines=5
-        )
+        result = run_test("grep_file - search for 'title' in large response", tools.grep_file,
+                          large_file, "title", max_lines=5)
         test_summary["total"] += 1
-        if "error" not in result:
-            test_summary["passed"] += 1
-        else:
-            test_summary["failed"] += 1
-
-        result = run_test(
-            "read_file_range - first 10 lines of large response",
-            tools.read_file_range,
-            large_file,
-            1,
-            10
-        )
+        test_summary["passed" if "error" not in result else "failed"] += 1
+        result = run_test("read_file_range - first 10 lines of large response", tools.read_file_range,
+                          large_file, 1, 10)
         test_summary["total"] += 1
-        if "error" not in result:
-            test_summary["passed"] += 1
-        else:
-            test_summary["failed"] += 1
+        test_summary["passed" if "error" not in result else "failed"] += 1
 
     # --- SUMMARY ---
     log_separator("TEST SUITE SUMMARY")
@@ -358,8 +264,6 @@ asyncio.run(main())
     log_separator("TEST SUITE COMPLETED")
     log(f"End time: {datetime.now().isoformat()}")
     log(f"All results logged to: {LOG_FILE}")
-
-    # Cleanup is automatic via atexit in sandbox.py
     log("Sandbox will be cleaned up automatically on exit.")
 
 if __name__ == "__main__":

@@ -5,20 +5,43 @@ Implements the ReAct (Reason + Act) loop connecting Ollama → Docker sandbox.
 Run with:
     python harness.py
 """
-
+import os
 import json
 import sys
 from openai import OpenAI
-
+from dotenv import load_dotenv
 from sandbox import start_sandbox
 from tools import TOOL_DISPATCH
 from schemas import TOOLS
+from llm_client import AnthropicProxyClient
+# # ── Configuration ──────────────────────────────────────────────────────────────
+# OLLAMA_BASE_URL = "http://localhost:11434/v1"
+# OLLAMA_API_KEY  = "ollama"          # Ollama doesn't need a real key
+# MODEL           = "qwen2.5"          # Change to "mistral" or another pulled model
+# MAX_ITERATIONS  = 10                # Safety limit: max tool calls per user turn
 
-# ── Configuration ──────────────────────────────────────────────────────────────
-OLLAMA_BASE_URL = "http://localhost:11434/v1"
-OLLAMA_API_KEY  = "ollama"          # Ollama doesn't need a real key
-MODEL           = "qwen2.5"          # Change to "mistral" or another pulled model
-MAX_ITERATIONS  = 10                # Safety limit: max tool calls per user turn
+
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Configuration with fallbacks
+OPUS_BASE_URL = os.getenv("OPUS_BASE_URL", "https://opus.abhibots.com")
+OPUS_API_KEY  = os.getenv("OPUS_API_KEY")
+OPUS_MODEL    = os.getenv("OPUS_MODEL", "claude-sonnet-4-20250514")
+
+if not OPUS_API_KEY:
+    raise ValueError("OPUS_API_KEY environment variable is not set. Please define it in a .env file.")
+
+# Initialize the LLM client
+client = AnthropicProxyClient(
+    base_url=OPUS_BASE_URL,
+    api_key=OPUS_API_KEY,
+    model=OPUS_MODEL
+)
+
+# For compatibility with existing code, keep MODEL variable if needed elsewhere
+MODEL = OPUS_MODEL
 
 SYSTEM_PROMPT = """You are a powerful coding assistant with access to an isolated Docker sandbox that has full internet access.
 You can execute shell commands, Python code, and automate a web browser (using Playwright) safely.

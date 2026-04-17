@@ -91,7 +91,7 @@ TOOLS = [
             },
         },
     },
-        {
+    {
         "type": "function",
         "function": {
             "name": "http_request",
@@ -155,7 +155,7 @@ TOOLS = [
             "description": (
                 "Execute a browser automation script using Playwright. "
                 "The script should be a complete Python program using the Playwright library. "
-                "The sandbox will ensure Playwright and Chromium are installed before running. "
+                "Playwright and Chromium are already installed in the sandbox. "
                 "Use this for tasks like navigating pages, clicking buttons, filling forms, and extracting data."
             ),
             "parameters": {
@@ -170,5 +170,4 @@ TOOLS = [
             },
         },
     },
-
 ]

@@ -34,14 +34,13 @@ def _create_args_schema_from_openai(tool_def: dict) -> Type[BaseModel]:
 
 def _clean_schema_for_anthropic(schema: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Recursively remove 'title' fields and 'default' keys with null values.
-    Also ensures 'required' lists only fields that are actually required.
+    Recursively remove 'title' and 'default' (when null) fields,
+    and ensure 'required' only contains existing properties.
     """
-    # Remove Pydantic metadata
+    # Remove top-level title/description
     schema.pop("title", None)
-    schema.pop("description", None)   # top-level description not needed
-    
-    # Process properties
+    schema.pop("description", None)
+
     if "properties" in schema:
         cleaned_props = {}
         for prop_name, prop_schema in schema["properties"].items():
@@ -53,21 +52,17 @@ def _clean_schema_for_anthropic(schema: Dict[str, Any]) -> Dict[str, Any]:
                 cleaned_props[prop_name] = prop_schema
         schema["properties"] = cleaned_props
 
-    # Clean items if array type
     if "items" in schema and isinstance(schema["items"], dict):
         schema["items"].pop("title", None)
 
-    # Ensure required only contains properties that exist
+    # Fix required list
     if "required" in schema:
-        existing_props = set(schema.get("properties", {}).keys())
-        schema["required"] = [r for r in schema["required"] if r in existing_props]
+        existing = set(schema.get("properties", {}).keys())
+        schema["required"] = [r for r in schema["required"] if r in existing]
         if not schema["required"]:
             del schema["required"]
 
-    # Add type if missing
-    if "type" not in schema:
-        schema["type"] = "object"
-
+    schema.setdefault("type", "object")
     return schema
 
 

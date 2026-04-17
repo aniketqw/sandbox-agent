@@ -13,11 +13,35 @@ from pydantic import Field, PrivateAttr
 
 from llm.client import AnthropicProxyClient
 from tools.langchain_adapter import _get_tool_schema
-
+import re
 # Use a logger with higher level to avoid cluttering the console
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)   # Only show warnings and errors
 
+
+def _parse_pseudo_tool_calls(content: str) -> list:
+    """
+    Extract tool calls from text like:
+    [TOOL_CALL]
+    {tool => "http_request", args => { --method "GET" --url "https://..." }}
+    [/TOOL_CALL]
+    """
+    pattern = r"\[TOOL_CALL\]\s*\{tool\s*=>\s*\"([^\"]+)\",\s*args\s*=>\s*\{([^}]+)\}\s*\}\s*\[/TOOL_CALL\]"
+    matches = re.findall(pattern, content, re.DOTALL)
+    tool_calls = []
+    for tool_name, args_str in matches:
+        # Parse args like: --method "GET" --url "https://..."
+        args = {}
+        arg_pattern = r"--(\w+)\s+\"([^\"]*)\""
+        for k, v in re.findall(arg_pattern, args_str):
+            args[k] = v
+        tool_calls.append({
+            "id": f"pseudo_{tool_name}_{len(tool_calls)}",
+            "name": tool_name,
+            "args": args,
+            "type": "tool_call",
+        })
+    return tool_calls
 
 class AnthropicProxyChatModel(BaseChatModel):
     client: AnthropicProxyClient = Field(..., exclude=True)
@@ -122,7 +146,14 @@ class AnthropicProxyChatModel(BaseChatModel):
             message = AIMessage(content=content, tool_calls=lc_tool_calls)
         else:
             message = AIMessage(content=content)
-
+        # If no structured tool calls, try parsing pseudo-calls from content
+        if not lc_tool_calls and content:
+            pseudo_calls = _parse_pseudo_tool_calls(content)
+            if pseudo_calls:
+                logger.info("Extracted pseudo tool calls from text: %s", pseudo_calls)
+                lc_tool_calls = pseudo_calls
+                # Remove the pseudo-call text from the displayed content
+                content = re.sub(r"\[TOOL_CALL\].*?\[/TOOL_CALL\]", "", content, flags=re.DOTALL).strip()
         if not content and not lc_tool_calls:
             logger.warning("LLM returned empty response (no content and no tool calls).")
 

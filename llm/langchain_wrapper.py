@@ -1,18 +1,12 @@
-"""
-LangChain-compatible wrapper for AnthropicProxyClient.
-Supports tool binding and conforms to BaseChatModel interface.
-"""
-
-
 # llm/langchain_wrapper.py
 import json
-import os
-from typing import Any, List, Optional, Iterator
+from typing import Any, List, Optional, Iterator, Dict
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import BaseTool
-from pydantic import Field
+from langchain_core.runnables import RunnableConfig
+from pydantic import Field, PrivateAttr
 
 from llm.client import AnthropicProxyClient
 
@@ -20,11 +14,13 @@ from llm.client import AnthropicProxyClient
 class AnthropicProxyChatModel(BaseChatModel):
     """
     A LangChain-compatible chat model that uses AnthropicProxyClient.
+    Supports tool binding by storing tools in an instance variable.
     """
     client: AnthropicProxyClient = Field(..., exclude=True)
     model: str = Field(default="claude-sonnet-4-20250514")
     temperature: float = Field(default=0.7)
     max_tokens: int = Field(default=1024)
+    _bound_tools: Optional[List[BaseTool]] = PrivateAttr(default=None)
 
     class Config:
         arbitrary_types_allowed = True
@@ -73,8 +69,8 @@ class AnthropicProxyChatModel(BaseChatModel):
             else:
                 raise ValueError(f"Unsupported message type: {type(msg)}")
 
-        # Extract tools from kwargs if bound
-        tools = kwargs.get("tools")
+        # Use bound tools if available, otherwise from kwargs
+        tools = self._bound_tools or kwargs.get("tools")
         openai_tools = None
         if tools:
             openai_tools = [
@@ -101,7 +97,6 @@ class AnthropicProxyChatModel(BaseChatModel):
         ai_message = response.choices[0].message
         content = ai_message.content or ""
 
-        # Build LangChain AIMessage with tool calls if present
         lc_tool_calls = []
         if ai_message.tool_calls:
             for tc in ai_message.tool_calls:
@@ -123,7 +118,7 @@ class AnthropicProxyChatModel(BaseChatModel):
         run_manager = None,
         **kwargs,
     ) -> Iterator[ChatGeneration]:
-        # For simplicity, we don't implement streaming; just yield the full result.
+        # Not implemented; fallback to non-streaming
         result = self._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
         yield result.generations[0]
 
@@ -133,7 +128,15 @@ class AnthropicProxyChatModel(BaseChatModel):
         **kwargs,
     ) -> "AnthropicProxyChatModel":
         """Bind tools to the model for tool calling."""
-        return super().bind_tools(tools, **kwargs)
+        # Create a new instance with the tools bound
+        new_model = self.__class__(
+            client=self.client,
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        new_model._bound_tools = tools
+        return new_model
 
     @property
     def _llm_type(self) -> str:

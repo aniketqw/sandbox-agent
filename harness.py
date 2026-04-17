@@ -56,9 +56,11 @@ def run_agent(messages: list, thread_id: str):
     final_state = graph.invoke({"messages": messages}, config=config)
     return final_state["messages"]
 def main():
+    provider = os.getenv("LLM_PROVIDER", "opus").upper()
+    model = os.getenv("OPUS_MODEL") if provider == "OPUS" else os.getenv("OLLAMA_MODEL", "llama3.2")
     print("=" * 60)
     print("  🤖  LangGraph Sandbox Agent")
-    print("  Model: Opus Proxy /", os.getenv("OPUS_MODEL", "claude-sonnet-4-20250514"))
+    print(f"  LLM: {provider} / {model}")
     print("  Sandbox: Docker")
     print("=" * 60)
 
@@ -112,6 +114,14 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
 # def main():
 #     print("=" * 60)
 #     print("  🤖  LangGraph Sandbox Agent")

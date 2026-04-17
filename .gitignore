@@ -1,3 +1,7 @@
 /__pycache__
 /agent_workspace
 .env
+agent/__pycache__/
+llm/__pycache__/
+tools/__pycache__/
+sandbox/__pycache__/

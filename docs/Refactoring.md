@@ -5,6 +5,20 @@
 
 This document describes the refactored architecture of the Sandbox Agent, which now uses **LangGraph** for stateful multi‑turn tool execution, **persistent memory** via checkpointing, and **LangSmith** for observability.
 
+## LLM Configuration
+
+The agent supports two LLM backends, selectable via the `LLM_PROVIDER` environment variable:
+
+| Provider | Description | Required Variables |
+|----------|-------------|-------------------|
+| `ollama` | Local Ollama instance | `OLLAMA_BASE_URL` (default `http://localhost:11434`), `OLLAMA_MODEL` (e.g., `qwen2.5`, `llama3.2`) |
+| `opus`   | Anthropic proxy endpoint | `OPUS_BASE_URL`, `OPUS_API_KEY`, `OPUS_MODEL` |
+
+**Switching Providers:**
+1. Set `LLM_PROVIDER` in `.env` to either `ollama` or `opus`.
+2. Provide the corresponding connection details.
+3. Restart the agent.
+
 ## Project Structure
 
 ```
@@ -14,8 +28,9 @@ sandbox-agent/
 │   ├── __init__.py
 │   ├── state.py               # AgentState TypedDict
 │   └── graph.py               # StateGraph definition & compilation
-├── llm/                       # LLM client and LangChain wrapper
+├── llm/                       # LLM clients and LangChain wrappers
 │   ├── __init__.py
+│   ├── factory.py             # LLM factory (selects provider based on env)
 │   ├── client.py              # AnthropicProxyClient (custom HTTP client)
 │   └── langchain_wrapper.py   # AnthropicProxyChatModel (BaseChatModel)
 ├── tools/                     # All tool‑related code
@@ -44,6 +59,7 @@ The main entry point. It:
 - Initialises the LangGraph agent graph.
 - Runs an interactive REPL loop with streaming output.
 - Uses a `thread_id` for persistent memory across turns.
+- Displays the active LLM provider and model.
 
 ### `agent/`
 Contains the LangGraph agent definition.
@@ -51,13 +67,14 @@ Contains the LangGraph agent definition.
 | File | Purpose |
 |------|---------|
 | `state.py` | Defines `AgentState`, a TypedDict with `messages` annotated for adding. |
-| `graph.py` | Builds the `StateGraph` with `agent` and `tools` nodes, conditional routing, and compiles it with a `MemorySaver` checkpointer. Exports `get_agent_graph()`. |
+| `graph.py` | Builds the `StateGraph` with `agent` and `tools` nodes, conditional routing, and compiles it with a `MemorySaver` checkpointer. Exports `get_agent_graph()`. Uses `llm.factory.get_chat_model()` to obtain the configured LLM. |
 
 ### `llm/`
 Handles communication with the LLM provider.
 
 | File | Purpose |
 |------|---------|
+| `factory.py` | Exports `get_chat_model()` – returns a LangChain `BaseChatModel` based on the `LLM_PROVIDER` environment variable. Supports `"opus"` and `"ollama"`. |
 | `client.py` | `AnthropicProxyClient` – a custom client that translates OpenAI‑style requests to Anthropic’s message format for the proxy endpoint. |
 | `langchain_wrapper.py` | `AnthropicProxyChatModel` – a LangChain `BaseChatModel` subclass that wraps the proxy client. It enables `.bind_tools()` and integrates with LangGraph. |
 
@@ -87,6 +104,9 @@ Test suite and logs.
 
 ## Key Functions (by Module)
 
+### `llm.factory`
+- `get_chat_model() -> BaseChatModel`: Returns a configured LangChain chat model based on `LLM_PROVIDER`. For `"ollama"` it returns a `ChatOllama` instance; for `"opus"` it returns an `AnthropicProxyChatModel` wrapped around `AnthropicProxyClient`.
+
 ### `sandbox.container`
 - `start_sandbox()`: Pulls image (if needed), creates/removes stale containers, mounts workspace, returns container object.
 - `stop_sandbox()`: Gracefully stops and removes the container.
@@ -112,7 +132,7 @@ Test suite and logs.
 - `AnthropicProxyChatModel`: Implements `_generate()` and `bind_tools()`.
 
 ### `agent.graph`
-- `get_agent_graph()`: Returns a compiled LangGraph `StateGraph` with `MemorySaver` checkpointing.
+- `get_agent_graph()`: Returns a compiled LangGraph `StateGraph` with `MemorySaver` checkpointing. Uses `get_chat_model()` from `llm.factory`.
 
 ### `harness`
 - `main()`: Orchestrates the REPL loop, streams agent events, and prints final responses.
@@ -121,11 +141,14 @@ Test suite and logs.
 
 | Variable | Description |
 |----------|-------------|
-| `OPUS_BASE_URL` | Base URL of the Anthropic proxy (default: `https://opus.abhibots.com`) |
-| `OPUS_API_KEY` | **Required** – API key for the proxy |
-| `OPUS_MODEL` | Model name (default: `claude-sonnet-4-20250514`) |
-| `LANGSMITH_API_KEY` | (Optional) LangSmith API key for tracing |
-| `LANGSMITH_PROJECT` | (Optional) LangSmith project name (default: `sandbox-agent`) |
+| `LLM_PROVIDER` | Which LLM backend to use: `"ollama"` or `"opus"` (default: `"opus"`). |
+| `OPUS_BASE_URL` | (Opus only) Base URL of the Anthropic proxy (default: `https://opus.abhibots.com`). |
+| `OPUS_API_KEY` | (Opus only) **Required** – API key for the proxy. |
+| `OPUS_MODEL` | (Opus only) Model name (default: `claude-sonnet-4-20250514`). |
+| `OLLAMA_BASE_URL` | (Ollama only) Ollama server URL (default: `http://localhost:11434`). |
+| `OLLAMA_MODEL` | (Ollama only) Model name (e.g., `llama3.2`, `qwen2.5`). |
+| `LANGSMITH_API_KEY` | (Optional) LangSmith API key for tracing. |
+| `LANGSMITH_PROJECT` | (Optional) LangSmith project name (default: `sandbox-agent`). |
 
 ## Running the Agent
 
@@ -133,7 +156,7 @@ Test suite and logs.
 # Install dependencies
 pip install -r requirements.txt
 
-# Set up .env file with API keys
+# Set up .env file with API keys and LLM_PROVIDER
 
 # Run the interactive agent
 python harness.py
@@ -149,6 +172,7 @@ python tests/test_all_tools.py
 - **Observability**: LangSmith traces every LLM call and tool execution.
 - **Separation of concerns**: Clear boundaries between sandbox, tools, LLM, and agent logic.
 - **Extensibility**: Adding a new tool only requires updating `tools/implementations.py`, `tools/schemas.py`, and `tools/dispatch.py`; the LangChain adapter picks it up automatically.
+- **Multi‑LLM support**: Switch between local Ollama and cloud‑based proxies via a single environment variable.
 
 ## Future Enhancements
 

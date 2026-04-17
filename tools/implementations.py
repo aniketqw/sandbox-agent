@@ -1,5 +1,5 @@
 """
-tools.py — Functions the agent can call to interact with the sandbox.
+tool/implementations.py — Functions the agent can call to interact with the sandbox.
 Each function maps 1-to-1 with a JSON schema defined in schemas.py.
 """
 

@@ -18,7 +18,7 @@ from llm_client import AnthropicProxyClient
 # OLLAMA_BASE_URL = "http://localhost:11434/v1"
 # OLLAMA_API_KEY  = "ollama"          # Ollama doesn't need a real key
 # MODEL           = "qwen2.5"          # Change to "mistral" or another pulled model
-# MAX_ITERATIONS  = 10                # Safety limit: max tool calls per user turn
+MAX_ITERATIONS  = 10                # Safety limit: max tool calls per user turn
 
 
 
@@ -33,12 +33,6 @@ OPUS_MODEL    = os.getenv("OPUS_MODEL", "claude-sonnet-4-20250514")
 if not OPUS_API_KEY:
     raise ValueError("OPUS_API_KEY environment variable is not set. Please define it in a .env file.")
 
-# Initialize the LLM client
-client = AnthropicProxyClient(
-    base_url=OPUS_BASE_URL,
-    api_key=OPUS_API_KEY,
-    model=OPUS_MODEL
-)
 
 # For compatibility with existing code, keep MODEL variable if needed elsewhere
 MODEL = OPUS_MODEL
@@ -175,11 +169,18 @@ def main():
     # Phase 1: Start the Docker sandbox
     start_sandbox()
 
-    # Phase 2: Initialize the OpenAI client pointed at Ollama
-    client = OpenAI(
-        base_url=OLLAMA_BASE_URL,
-        api_key=OLLAMA_API_KEY,
+    # # Phase 2: Initialize the OpenAI client pointed at Ollama
+    # client = OpenAI(
+    #     base_url=OLLAMA_BASE_URL,
+    #     api_key=OLLAMA_API_KEY,
+    # )
+    # Initialize the LLM client
+    client = AnthropicProxyClient(
+    base_url=OPUS_BASE_URL,
+    api_key=OPUS_API_KEY,
+    model=OPUS_MODEL
     )
+
 
     # Phase 3: Initialize conversation with system prompt
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]

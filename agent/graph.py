@@ -4,8 +4,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
-from llm.client import AnthropicProxyClient
-from llm.langchain_wrapper import AnthropicProxyChatModel
+from llm.factory import get_chat_model
 from tools.langchain_adapter import get_tools
 from agent.state import AgentState
 
@@ -17,12 +16,8 @@ def get_agent_graph():
     if _graph is not None:
         return _graph, _checkpointer
 
-    client = AnthropicProxyClient(
-        base_url=os.getenv("OPUS_BASE_URL", "https://opus.abhibots.com"),
-        api_key=os.getenv("OPUS_API_KEY"),
-        model=os.getenv("OPUS_MODEL", "claude-sonnet-4-20250514")
-    )
-    llm = AnthropicProxyChatModel(client=client)
+    # Get the appropriate chat model based on LLM_PROVIDER
+    llm = get_chat_model()
     tools = get_tools()
     llm_with_tools = llm.bind_tools(tools)
 

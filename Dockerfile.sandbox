@@ -1,0 +1,20 @@
+FROM mcr.microsoft.com/playwright/python:v1.47.0-noble
+
+# Install additional system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install common Python packages
+RUN pip install --no-cache-dir \
+    requests \
+    beautifulsoup4 \
+    pandas \
+    tavily-python \
+    playwright
+
+# Verify Playwright is present
+RUN python -c "import playwright; print('Playwright OK')"
+
+WORKDIR /workspace
+CMD ["tail", "-f", "/dev/null"]

@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 from sandbox.container import get_container, WORKSPACE_CONTAINER
 from tavily import TavilyClient
-
+import requests  # Add this import at the top
 TEMP_SCRIPT = os.path.join(WORKSPACE_CONTAINER, "agent_temp.py")
 HTTP_RESPONSE_DIR = os.path.join(WORKSPACE_CONTAINER, "http_responses")
 
@@ -15,65 +15,55 @@ HTTP_RESPONSE_DIR = os.path.join(WORKSPACE_CONTAINER, "http_responses")
 # Core Tools
 # ------------------------------------------------------------
 
+# In tools/implementations.py
+
+
+
 def http_request(url: str, method: str = "GET", data: str = None, headers: dict = None) -> dict:
+    """Perform an HTTP request using the requests library."""
     # Failsafe: if LLM passes None for method, default to GET
     if method is None:
         method = "GET"
     container = get_container()
     print(f"\n[Tool] http_request: {method} {url}")
 
-    # Ensure CA certificates are installed
-    container.exec_run(["apt-get", "update"], demux=True)
-    container.exec_run(["apt-get", "install", "-y", "ca-certificates"], demux=True)
-
     container.exec_run(cmd=["sh", "-c", f"mkdir -p {HTTP_RESPONSE_DIR}"])
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     response_file = os.path.join(HTTP_RESPONSE_DIR, f"resp_{timestamp}.json")
 
-    data_repr = repr(data)
-    headers_repr = repr(headers)
+    # Install requests if not present (should be in base image)
+    container.exec_run(["pip", "install", "--quiet", "requests"])
 
-    # Script with retry logic and SSL context
     script = f"""
-import urllib.request
 import json
-import ssl
-import time
+import requests
 
 url = {json.dumps(url)}
 method = {json.dumps(method)}
-data = {data_repr}
-headers = {headers_repr}
+data = {repr(data)}
+headers = {repr(headers) if headers else 'None'}
 
-# Create unverified SSL context (bypass certificate validation for problematic endpoints)
-ssl_context = ssl._create_unverified_context()
-
-max_retries = 3
-for attempt in range(max_retries):
+try:
+    if method == 'GET':
+        response = requests.get(url, headers=headers, verify=False, timeout=30)
+    else: # POST
+        response = requests.post(url, headers=headers, data=data, verify=False, timeout=30)
+    
+    # Attempt to parse JSON, fall back to text if it fails
     try:
-        req = urllib.request.Request(url, method=method)
-        if headers is not None:
-            for k, v in headers.items():
-                req.add_header(k, v)
-        if data is not None and method == "POST":
-            req.data = data.encode('utf-8')
+        body = response.json()
+    except json.JSONDecodeError:
+        body = response.text
         
-        with urllib.request.urlopen(req, context=ssl_context, timeout=30) as response:
-            status = response.status
-            resp_headers = dict(response.headers)
-            body = response.read().decode('utf-8', errors='replace')
-            output = {{"status": status, "headers": resp_headers, "body": body}}
-            with open("{response_file}", "w") as f:
-                json.dump(output, f)
-            print(json.dumps(output))
-            break
-    except Exception as e:
-        if attempt == max_retries - 1:
-            print(json.dumps({{"error": str(e)}}))
-        else:
-            time.sleep(1)
+    output = {{"status": response.status_code, "headers": dict(response.headers), "body": body}}
+    with open("{response_file}", "w") as f:
+        json.dump(output, f)
+    print(json.dumps(output))
+except Exception as e:
+    print(json.dumps({{"error": str(e)}}))
 """
+    # ... (rest of the function to write and execute the script) ...
     safe_script = script.replace("'", "'\\''")
     write_cmd = f"printf '%s' '{safe_script}' > /tmp/http_req.py"
     container.exec_run(cmd=["sh", "-c", write_cmd])

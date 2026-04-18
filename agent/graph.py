@@ -2,17 +2,18 @@
 import os
 import json
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode
+from langgraph.prebuilt import ToolNode, create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt, Command
 from langchain_core.messages import ToolMessage, AIMessage, HumanMessage, SystemMessage
+from langchain_core.tools import tool
 
 from llm.factory import get_chat_model
 from tools.langchain_adapter import get_tools
 from agent.state import AgentState
 
-MAX_STEPS = 20
-MAX_REFLECTIONS = 3
+MAX_STEPS = 30
+MAX_REFLECTIONS = 2
 
 _graph = None
 _checkpointer = None
@@ -29,29 +30,104 @@ def get_agent_graph():
         return _graph, _checkpointer
 
     llm = get_chat_model()
-    tools = get_tools()
-    tool_node = ToolNode(tools)
+    all_tools = get_tools()
+    tool_node = ToolNode(all_tools)
 
     # ------------------------------------------------------------
-    # Plan Node
+    # Handoff Tools for Supervisor → Worker delegation
     # ------------------------------------------------------------
-    def plan_node(state: AgentState):
-        llm_with_tools = llm.bind_tools(tools)
-        plan_prompt = SystemMessage(content=(
-            "You are a planning assistant. Create a concise step-by-step plan to address the user's request. "
-            "If you need to fetch data or research, you may use tools (e.g., http_request, web_search) immediately. "
-            "After gathering necessary information, summarize the plan for approval."
+    def make_handoff_tool(worker_name: str):
+        """Creates a tool that the supervisor uses to delegate a task to a worker."""
+        @tool(worker_name)
+        def handoff(task_description: str):
+            """Call this to assign a sub-task to the worker."""
+            return {"assigned_to": worker_name, "task": task_description}
+        return handoff
+
+    supervisor_tools = [
+        make_handoff_tool("coder"),
+        make_handoff_tool("researcher"),
+    ]
+
+    # ------------------------------------------------------------
+    # Supervisor Node (The Master)
+    # ------------------------------------------------------------
+    supervisor_llm = llm.bind_tools(supervisor_tools)
+
+    def supervisor_node(state: AgentState):
+        # First, think step by step to formulate a plan
+        think_prompt = SystemMessage(content=(
+            "You are the supervisor agent. Your job is to analyze the user's request and create a high-level plan. "
+            "If the task requires writing or executing code, delegate it to the 'coder' worker. "
+            "If it requires web research, delegate it to the 'researcher' worker. "
+            "You may also use tools directly if needed. After gathering results, synthesize a final answer."
         ))
-        messages = [plan_prompt] + state["messages"]
-        response = llm_with_tools.invoke(messages)
+        messages = [think_prompt] + state["messages"]
+        response = supervisor_llm.invoke(messages)
         return {
             "messages": [response],
             "plan": response.content if response.content else None,
-            "step_count": state.get("step_count", 0) + 1,
         }
 
     # ------------------------------------------------------------
-    # Approval Node
+    # Coder Worker (Specialized Agent)
+    # ------------------------------------------------------------
+    # Filter tools for the coder
+    coder_tools = [t for t in all_tools if t.name in ["execute_python", "write_file", "read_file", "run_shell_command"]]
+    coder_agent = create_react_agent(
+        llm, coder_tools,
+        prompt="You are a coding specialist. Write and execute Python code to solve assigned tasks. Report results clearly."
+    )
+
+    def coder_node(state: AgentState):
+        # Extract the last handoff task for the coder
+        last_msg = state["messages"][-1]
+        task_description = ""
+        if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+            for tc in last_msg.tool_calls:
+                if tc["name"] == "coder":
+                    task_description = tc["args"].get("task_description", "")
+                    break
+        if not task_description:
+            return {"messages": [AIMessage(content="No task provided for coder.")]}
+
+        # Create a sub-state for the worker
+        worker_messages = [HumanMessage(content=f"Complete this task: {task_description}")]
+        result = coder_agent.invoke({"messages": worker_messages})
+        return {
+            "messages": result["messages"],
+            "worker_results": [{"worker": "coder", "task": task_description, "output": result["messages"][-1].content}],
+        }
+
+    # ------------------------------------------------------------
+    # Researcher Worker (Web Search Specialist)
+    # ------------------------------------------------------------
+    researcher_tools = [t for t in all_tools if t.name in ["web_search", "http_request"]]
+    researcher_agent = create_react_agent(
+        llm, researcher_tools,
+        prompt="You are a research specialist. Use web_search and http_request to gather information."
+    )
+
+    def researcher_node(state: AgentState):
+        last_msg = state["messages"][-1]
+        task_description = ""
+        if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+            for tc in last_msg.tool_calls:
+                if tc["name"] == "researcher":
+                    task_description = tc["args"].get("task_description", "")
+                    break
+        if not task_description:
+            return {"messages": [AIMessage(content="No task provided for researcher.")]}
+
+        worker_messages = [HumanMessage(content=f"Complete this task: {task_description}")]
+        result = researcher_agent.invoke({"messages": worker_messages})
+        return {
+            "messages": result["messages"],
+            "worker_results": [{"worker": "researcher", "task": task_description, "output": result["messages"][-1].content}],
+        }
+
+    # ------------------------------------------------------------
+    # Human Approval Node (Interrupts for feedback)
     # ------------------------------------------------------------
     def approval_node(state: AgentState):
         plan_summary = state.get("plan", "No plan was generated.")
@@ -61,7 +137,7 @@ def get_agent_graph():
             "message": "Please review the plan. Approve, edit, or reject."
         })
         if user_decision.get("type") == "approve":
-            return {"plan_approved": True}  # No step_count
+            return {"plan_approved": True}
         elif user_decision.get("type") == "edit":
             feedback = user_decision.get("feedback", "Please revise the plan.")
             return {
@@ -75,131 +151,41 @@ def get_agent_graph():
             }
 
     # ------------------------------------------------------------
-    # Execute Node
-    # ------------------------------------------------------------
-    def execute_node(state: AgentState):
-        llm_with_tools = llm.bind_tools(tools)
-        exec_prompt = SystemMessage(content=(
-            "You are an execution assistant. Execute the approved plan step-by-step using the available tools. "
-            "If you encounter an error, report it. When finished, output a summary of what was done."
-        ))
-        messages = [exec_prompt] + state["messages"]
-        response = llm_with_tools.invoke(messages)
-        return {
-            "messages": [response],
-            "step_count": state.get("step_count", 0) + 1,
-            "reflection_count": 0,
-        }
-
-    # ------------------------------------------------------------
-    # Reflect Node
-    # ------------------------------------------------------------
-    def reflect_node(state: AgentState):
-        error_count, errors = _count_recent_tool_errors(state["messages"], lookback=3)
-        if error_count == 0:
-            return {"step_count": state.get("step_count", 0)}
-        error_details = "\n".join(errors)
-        reflection_prompt = HumanMessage(content=(
-            f"The following tool call errors occurred:\n{error_details}\n"
-            "Analyze these errors and suggest a corrected tool call or a different approach. "
-            "Provide a new tool call to try, or ask the human for help if you are unsure."
-        ))
-        llm_with_tools = llm.bind_tools(tools)
-        messages = state["messages"] + [reflection_prompt]
-        response = llm_with_tools.invoke(messages)
-        return {
-            "messages": [response],
-            "step_count": state.get("step_count", 0) + 1,
-            "reflection_count": state.get("reflection_count", 0) + 1,
-        }
-
-    # ------------------------------------------------------------
-    # Ask Human Node
-    # ------------------------------------------------------------
-    def ask_human_node(state: AgentState):
-        ask_msg = AIMessage(
-            content="I'm having trouble completing this task after several attempts. I need your guidance.",
-            tool_calls=[{
-                "id": f"ask_human_{state.get('step_count', 0)}",
-                "name": "ask_human",
-                "args": {"question": "I'm encountering repeated tool failures. What should I do differently?"},
-                "type": "tool_call"
-            }]
-        )
-        return {
-            "messages": [ask_msg],
-            "step_count": state.get("step_count", 0) + 1,
-        }
-
-    # ------------------------------------------------------------
-    # Graph Construction
+    # Build Graph
     # ------------------------------------------------------------
     workflow = StateGraph(AgentState)
 
-    workflow.add_node("plan", plan_node)
-    workflow.add_node("approval", approval_node)
-    workflow.add_node("execute", execute_node)
+    workflow.add_node("supervisor", supervisor_node)
+    workflow.add_node("coder", coder_node)
+    workflow.add_node("researcher", researcher_node)
     workflow.add_node("tools", tool_node)
-    workflow.add_node("reflect", reflect_node)
-    workflow.add_node("ask_human", ask_human_node)
+    workflow.add_node("approval", approval_node)
 
-    workflow.set_entry_point("plan")
+    workflow.set_entry_point("supervisor")
 
-    # After plan: if tool_calls -> tools, else -> approval
-    def after_plan(state: AgentState):
-        if state.get("step_count", 0) >= MAX_STEPS:
-            return END
+    # After supervisor: if handoff tool called -> go to that worker; else -> approval
+    def after_supervisor(state: AgentState):
         last_msg = state["messages"][-1]
         if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+            for tc in last_msg.tool_calls:
+                if tc["name"] in ["coder", "researcher"]:
+                    return tc["name"]
+            # If other tool calls, go to tools
             return "tools"
-        else:
+        # No tool calls, check if we need approval
+        if not state.get("plan_approved", False):
             return "approval"
+        return END
 
-    workflow.add_conditional_edges("plan", after_plan)
+    workflow.add_conditional_edges("supervisor", after_supervisor, {"coder": "coder", "researcher": "researcher", "tools": "tools", "approval": "approval", END: END})
 
-    # After tools called from plan: go back to plan to incorporate results
-    workflow.add_edge("tools", "plan")
+    # Workers return to supervisor after completion
+    workflow.add_edge("coder", "supervisor")
+    workflow.add_edge("researcher", "supervisor")
+    workflow.add_edge("tools", "supervisor")
 
-    # Approval routing
-    def after_approval(state: AgentState):
-        if state.get("plan_approved"):
-            return "execute"
-        else:
-            return "plan"
-
-    workflow.add_conditional_edges("approval", after_approval)
-
-    # Execute routing
-    def after_execute(state: AgentState):
-        if state.get("step_count", 0) >= MAX_STEPS:
-            return END
-        last_msg = state["messages"][-1]
-        if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-            return "tools"
-        else:
-            error_count, _ = _count_recent_tool_errors(state["messages"], lookback=3)
-            if error_count > 0 and state.get("reflection_count", 0) < MAX_REFLECTIONS:
-                return "reflect"
-            return END
-
-    workflow.add_conditional_edges("execute", after_execute, {"tools": "tools", "reflect": "reflect", END: END})
-    workflow.add_edge("tools", "execute")
-
-    # Reflect routing
-    def after_reflect(state: AgentState):
-        if state.get("step_count", 0) >= MAX_STEPS:
-            return END
-        if state.get("reflection_count", 0) >= MAX_REFLECTIONS:
-            return "ask_human"
-        last_msg = state["messages"][-1]
-        if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-            return "tools"
-        else:
-            return "execute"
-
-    workflow.add_conditional_edges("reflect", after_reflect, {"tools": "tools", "execute": "execute", "ask_human": "ask_human"})
-
-    workflow.add_edge("ask_human", "execute")
+    # Approval goes back to supervisor to re-plan or proceed
+    workflow.add_edge("approval", "supervisor")
 
     _checkpointer = MemorySaver()
     _graph = workflow.compile(checkpointer=_checkpointer)

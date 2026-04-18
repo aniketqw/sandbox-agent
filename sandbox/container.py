@@ -1,6 +1,6 @@
 """
 sandbox.py — Manages the Docker container lifecycle.
-Works locally (macOS) and attempts to work inside LangGraph Studio.
+Works locally (macOS) and inside LangGraph Studio (lazy client).
 """
 
 import docker
@@ -32,8 +32,7 @@ def _get_docker_client():
             if _in_studio():
                 raise RuntimeError(
                     f"Cannot connect to Docker in LangGraph Studio. "
-                    f"Tool execution is only available when running locally (`python harness.py`). "
-                    f"Error: {e}"
+                    f"Tool execution is only available when running locally (`python harness.py`)."
                 )
             else:
                 raise
@@ -46,7 +45,7 @@ _persistent = os.getenv("SANDBOX_PERSISTENT", "true").lower() == "true"
 
 def start_sandbox():
     global _container
-    client = _get_docker_client()
+    client = _get_docker_client()  # Lazy client creation
 
     try:
         existing = client.containers.get(CONTAINER_NAME)

@@ -23,7 +23,7 @@
       "image": "sandbox-agent:latest",
       "command": "tail -f /dev/null",
       "volumes": [
-        "./agent_workspace:/workspace"
+        "../agent_workspace:/workspace"
       ],
       "working_dir": "/workspace"
     }

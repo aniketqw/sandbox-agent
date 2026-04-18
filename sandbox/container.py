@@ -8,23 +8,30 @@ import docker
 import os
 import atexit
 
-WORKSPACE_HOST = os.path.join(os.path.dirname(__file__), "agent_workspace")
+WORKSPACE_HOST = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "agent_workspace"))
 WORKSPACE_CONTAINER = "/workspace"
 IMAGE = "sandbox-agent:latest"
 
-# Detect if running inside a container (LangGraph Studio)
-IN_STUDIO = os.path.exists("/.dockerenv")
+def _in_studio() -> bool:
+    """Return True if running inside LangGraph Studio's container."""
+    # LangGraph Studio sets LANGGRAPH_API_URL environment variable
+    return os.getenv("LANGGRAPH_API_URL") is not None
 
-if IN_STUDIO:
-    # Inside LangGraph Studio: use the Docker socket mounted in the studio container
-    # The sandbox is a service defined in langgraph.json, accessible by name
-    client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
-    CONTAINER_NAME = "sandbox"   # Matches the service name in langgraph.json
-else:
-    # Running locally on macOS: use the Docker Desktop socket
-    client = docker.DockerClient(base_url="unix:///Users/aniketsaxena/.docker/run/docker.sock")
-    CONTAINER_NAME = "sandbox_agent_env"
+def _get_docker_client():
+    """Return a Docker client appropriate for the current environment."""
+    if _in_studio():
+        # Inside LangGraph Studio: use the mounted Docker socket
+        return docker.DockerClient(base_url="unix:///var/run/docker.sock")
+    else:
+        # Local macOS: use Docker Desktop socket
+        return docker.DockerClient(base_url="unix:///Users/aniketsaxena/.docker/run/docker.sock")
 
+def _get_container_name():
+    """Return the container name for the current environment."""
+    return "sandbox" if _in_studio() else "sandbox_agent_env"
+
+client = _get_docker_client()
+CONTAINER_NAME = _get_container_name()
 _container = None
 _persistent = os.getenv("SANDBOX_PERSISTENT", "true").lower() == "true"
 
@@ -32,7 +39,6 @@ _persistent = os.getenv("SANDBOX_PERSISTENT", "true").lower() == "true"
 def start_sandbox():
     global _container
 
-    # Check if container already exists
     try:
         existing = client.containers.get(CONTAINER_NAME)
         if existing.status == "running":
@@ -72,7 +78,6 @@ def start_sandbox():
 
     print(f"[Sandbox] Container '{CONTAINER_NAME}' is running (ID: {_container.short_id})")
 
-    # Only register cleanup if not persistent
     if not _persistent:
         atexit.register(stop_sandbox)
 

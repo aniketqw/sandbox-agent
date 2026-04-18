@@ -1,6 +1,6 @@
 """
 sandbox.py — Manages the Docker container lifecycle.
-Works locally (macOS) and inside LangGraph Studio (with mounted socket).
+Works locally (macOS) and attempts to work inside LangGraph Studio.
 """
 
 import docker
@@ -14,18 +14,31 @@ IMAGE = "sandbox-agent:latest"
 def _in_studio() -> bool:
     return os.getenv("LANGGRAPH_API_URL") is not None
 
-def _get_docker_client():
-    if _in_studio():
-        # Inside Studio, Docker socket is mounted at /var/run/docker.sock
-        return docker.DockerClient(base_url="unix:///var/run/docker.sock")
-    else:
-        # Local macOS
-        return docker.DockerClient(base_url="unix:///Users/aniketsaxena/.docker/run/docker.sock")
-
 def _get_container_name():
     return "sandbox" if _in_studio() else "sandbox_agent_env"
 
-client = _get_docker_client()
+_client = None
+def _get_docker_client():
+    global _client
+    if _client is None:
+        if _in_studio():
+            socket_path = "/var/run/docker.sock"
+        else:
+            socket_path = "/Users/aniketsaxena/.docker/run/docker.sock"
+        try:
+            _client = docker.DockerClient(base_url=f"unix://{socket_path}")
+            _client.ping()  # Verify connection
+        except Exception as e:
+            if _in_studio():
+                raise RuntimeError(
+                    f"Cannot connect to Docker in LangGraph Studio. "
+                    f"Tool execution is only available when running locally (`python harness.py`). "
+                    f"Error: {e}"
+                )
+            else:
+                raise
+    return _client
+
 CONTAINER_NAME = _get_container_name()
 _container = None
 _persistent = os.getenv("SANDBOX_PERSISTENT", "true").lower() == "true"
@@ -33,6 +46,7 @@ _persistent = os.getenv("SANDBOX_PERSISTENT", "true").lower() == "true"
 
 def start_sandbox():
     global _container
+    client = _get_docker_client()
 
     try:
         existing = client.containers.get(CONTAINER_NAME)

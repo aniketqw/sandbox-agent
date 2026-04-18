@@ -1,6 +1,6 @@
 """
 sandbox.py — Manages the Docker container lifecycle.
-Works locally (macOS) and inside LangGraph Studio.
+Works locally (macOS) and inside LangGraph Studio (with mounted socket).
 """
 
 import docker
@@ -16,10 +16,10 @@ def _in_studio() -> bool:
 
 def _get_docker_client():
     if _in_studio():
-        # In Studio, we cannot connect to the host's Docker daemon.
-        # Return None to indicate that Docker operations are unavailable.
-        return None
+        # Inside Studio, Docker socket is mounted at /var/run/docker.sock
+        return docker.DockerClient(base_url="unix:///var/run/docker.sock")
     else:
+        # Local macOS
         return docker.DockerClient(base_url="unix:///Users/aniketsaxena/.docker/run/docker.sock")
 
 def _get_container_name():
@@ -33,18 +33,50 @@ _persistent = os.getenv("SANDBOX_PERSISTENT", "true").lower() == "true"
 
 def start_sandbox():
     global _container
-    if client is None:
-        print("[Sandbox] Running inside LangGraph Studio; assuming sandbox service is already running.")
-        # Create a dummy container object for compatibility
-        class DummyContainer:
-            short_id = "studio-sandbox"
-            status = "running"
-            def exec_run(self, *args, **kwargs):
-                raise NotImplementedError("Tool execution is not available in LangGraph Studio. Please run the agent locally (`python harness.py`) to execute tools.")
-        _container = DummyContainer()
-        return _container
 
-    # ... rest of local logic unchanged ...
+    try:
+        existing = client.containers.get(CONTAINER_NAME)
+        if existing.status == "running":
+            print(f"[Sandbox] Reusing existing container '{CONTAINER_NAME}' (ID: {existing.short_id})")
+            _container = existing
+            return _container
+        elif existing.status == "exited":
+            print(f"[Sandbox] Starting stopped container '{CONTAINER_NAME}'...")
+            existing.start()
+            _container = existing
+            print(f"[Sandbox] Container '{CONTAINER_NAME}' is running (ID: {_container.short_id})")
+            return _container
+        else:
+            print(f"[Sandbox] Removing stale container '{CONTAINER_NAME}'...")
+            existing.stop()
+            existing.remove()
+    except docker.errors.NotFound:
+        pass
+
+    os.makedirs(WORKSPACE_HOST, exist_ok=True)
+
+    print(f"[Sandbox] Creating new container '{CONTAINER_NAME}'...")
+    _container = client.containers.run(
+        image=IMAGE,
+        name=CONTAINER_NAME,
+        command="tail -f /dev/null",
+        detach=True,
+        volumes={
+            WORKSPACE_HOST: {
+                "bind": WORKSPACE_CONTAINER,
+                "mode": "rw",
+            }
+        },
+        working_dir=WORKSPACE_CONTAINER,
+        mem_limit="1g",
+    )
+
+    print(f"[Sandbox] Container '{CONTAINER_NAME}' is running (ID: {_container.short_id})")
+
+    if not _persistent:
+        atexit.register(stop_sandbox)
+
+    return _container
 
 
 def stop_sandbox():

@@ -18,6 +18,11 @@
     "rich>=13.0.0",
     "playwright>=1.40.0"
   ],
+  "docker": {
+    "volumes": [
+      "/Users/aniketsaxena/.docker/run/docker.sock:/var/run/docker.sock"
+    ]
+  },
   "services": {
     "sandbox": {
       "image": "sandbox-agent:latest",

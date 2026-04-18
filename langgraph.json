@@ -1,7 +1,31 @@
 {
-  "dependencies": ["."],
   "graphs": {
     "agent": "./agent/graph.py:get_graph"
   },
-  "env": ".env"
+  "env": ".env",
+  "python_version": "3.11",
+  "dependencies": [
+    "langgraph>=0.2.0",
+    "langchain>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-ollama>=0.1.0",
+    "langsmith>=0.1.0",
+    "pydantic>=2.0.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+    "docker>=7.0.0",
+    "tavily-python",
+    "rich>=13.0.0",
+    "playwright>=1.40.0"
+  ],
+  "services": {
+    "sandbox": {
+      "image": "sandbox-agent:latest",
+      "command": "tail -f /dev/null",
+      "volumes": [
+        "./agent_workspace:/workspace"
+      ],
+      "working_dir": "/workspace"
+    }
+  }
 }

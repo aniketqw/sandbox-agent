@@ -1,6 +1,6 @@
 """
 harness.py — LangGraph-powered agent with checkpointing and LangSmith.
-Clean terminal UI using Rich. Supports Plan → Approval → Execute → Reflect flow.
+Clean terminal UI using Rich.
 """
 
 import os
@@ -8,7 +8,6 @@ import sys
 from dotenv import load_dotenv
 from langsmith import traceable
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, AIMessage
-from langgraph.types import Command
 import logging
 
 from rich.console import Console
@@ -59,26 +58,24 @@ Your available tools:
   Arguments: { "query": "<search query>", "max_results": <int> }
 - ask_human: Ask the human user a question when you are stuck or need clarification.
   Arguments: { "question": "<your question to the user>" }
-- request_approval: Request user approval before executing a plan.
-  Arguments: { "plan_summary": "<summary of your plan>", "code_to_execute": "<optional code>" }
+
+CRITICAL RULES:
+
+1. For execute_python, the argument MUST be named `code` and contain the full Python script as a string. Do NOT pass `filename` or any other argument.
+2. When given a multi‑step task, you MUST complete ALL steps. Do NOT stop after the first tool call.
+3. After a tool returns, immediately continue with the next logical step.
+4. If you need to extract data from a JSON response, use execute_python to parse it and print the result.
+5. Only provide a final summary after ALL steps are completed.
+6. When http_request returns a 'full_response_file' field, use execute_python to read and parse the JSON file.
+7. If you are uncertain or stuck, use ask_human.
+
 
 Guidelines:
-1. **Think step by step and create a clear plan before acting.**
-2. If you need information not in your training data or want to research a topic, use web_search.
-3. For multi-step tasks, summarize your plan and use request_approval to get user confirmation before executing.
-4. After approval, execute the plan using the available tools.
-5. When the task is complete, save the final results or a summary to a file in /workspace (e.g., result.txt, report.json).
-6. **Use the exact tool names and argument formats shown above.** Provide all required arguments with the correct types.
-7. For execute_python, provide the complete Python code as a single string in the `code` argument.
-8. For http_request, provide the `url` and optionally `method`. Default is GET.
-9. When http_request returns a 'full_response_file' field, use grep_file or read_file_range to explore it.
-10. **IMPORTANT**: When a tool returns data, **always quote the exact output** in your final response.
-11. The sandbox has full internet access. Standard library and pip-installable packages are available.
-12. This is an educational environment. Do not violate any website's Terms of Service.
-13. Report results clearly, including stdout/stderr/exit codes from the sandbox.
-14. **You have persistent memory across conversation turns.** You can refer to previous interactions and files.
-15. **If a tool fails repeatedly or you are uncertain how to proceed, use ask_human to get help.**
-16. After several unsuccessful attempts, pause and reflect on what might be wrong, then adjust your approach or ask for help.
+- **Use the exact tool names and argument formats shown above.**
+- For execute_python, provide the complete Python code as a single string in the `code` argument.
+- For http_request, provide the `url` and optionally `method`. Default is GET.
+- Report results clearly, including stdout/stderr/exit codes from the sandbox.
+- You have persistent memory across conversation turns. Refer to previous interactions and files.
 """
 
 
@@ -101,7 +98,7 @@ def main():
     if provider == "OPUS":
         model = os.getenv("OPUS_MODEL", "claude-sonnet-4-20250514")
     else:
-        model = os.getenv("OLLAMA_MODEL", "llama3.2")
+        model = os.getenv("OLLAMA_MODEL", "qwen2.5")
 
     console.print(Panel.fit(
         f"[bold cyan]🤖 LangGraph Sandbox Agent[/]\n"
@@ -120,10 +117,6 @@ def main():
     state = {
         "messages": [SystemMessage(content=SYSTEM_PROMPT)],
         "step_count": 0,
-        "reflection_count": 0,
-        "plan": None,
-        "plan_approved": False,
-        "tool_errors": []
     }
 
     while True:
@@ -139,74 +132,33 @@ def main():
             console.print("[green]Goodbye![/]")
             break
 
-        # Reset per-turn state
+        # Append user message and reset step counter for this turn
         state["messages"].append(HumanMessage(content=user_input))
         state["step_count"] = 0
-        state["reflection_count"] = 0
-        state["plan"] = None
-        state["plan_approved"] = False
-        state["tool_errors"] = []
 
         graph, _ = get_agent_graph()
         config = {"configurable": {"thread_id": thread_id}}
 
-        console.print("[cyan]Agent is planning...[/]")
-
+        console.print("[cyan]Thinking...[/]")
         try:
-            # Stream to handle interrupts (approval requests)
-            for event in graph.stream(state, config=config):
-                if 'interrupt' in event:
-                    interrupt_data = event['interrupt']
-                    console.print()
-                    console.print(Panel(
-                        f"[bold yellow]📋 Approval Required[/]\n\n"
-                        f"[bold]Plan:[/]\n{interrupt_data['plan']}\n\n"
-                        f"{interrupt_data['message']}",
-                        title="Awaiting Human Input",
-                        border_style="yellow"
-                    ))
-                    # Get user decision
-                    decision = console.input("[bold green]Approve / Edit / Reject? (a/e/r): [/]").strip().lower()
-                    if decision == 'a':
-                        user_feedback = {"type": "approve"}
-                    elif decision == 'e':
-                        feedback = console.input("[bold]Please provide feedback to edit the plan: [/]")
-                        user_feedback = {"type": "edit", "feedback": feedback}
-                    else:  # 'r' or anything else
-                        user_feedback = {"type": "reject"}
-
-                    # Resume graph with the user's decision
-                    final_state = graph.invoke(Command(resume=user_feedback), config=config)
-                    state = final_state
-                    break  # Exit the event loop after handling interrupt
-                else:
-                    # Normal event (no interrupt) – update state with the latest
-                    for node_name, node_output in event.items():
-                        if node_output and "messages" in node_output:
-                            state = node_output
-            else:
-                # If we didn't break (no interrupt), the stream finished normally
-                # The last event is the final state
-                pass
-
+            final_state = graph.invoke(state, config=config)
         except Exception as e:
             console.print(f"[red]Error during execution: {e}[/]")
-            import traceback
-            traceback.print_exc()
             continue
 
-        # Display final response
-        last_msg = state["messages"][-1] if state.get("messages") else None
+        state = final_state
+        last_msg = state["messages"][-1]
+
         if isinstance(last_msg, AIMessage) and last_msg.content:
             console.print()
             console.print(Panel(
                 Markdown(last_msg.content),
-                title="Agent Response",
+                title="Agent",
                 border_style="green"
             ))
         else:
             # Fallback: show summary of tool results
-            summary = _extract_tool_results(state.get("messages", []))
+            summary = _extract_tool_results(state["messages"])
             console.print()
             console.print(Panel(
                 f"[yellow]The agent completed its tasks but did not produce a final message.[/]\n\n"
@@ -214,10 +166,6 @@ def main():
                 title="Agent Summary",
                 border_style="yellow"
             ))
-
-        # Optionally show step count if limit reached
-        if state.get("step_count", 0) >= 20:
-            console.print("[dim]Reached maximum steps for this turn.[/]")
 
 if __name__ == "__main__":
     main()

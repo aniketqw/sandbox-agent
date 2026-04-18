@@ -5,3 +5,5 @@ agent/__pycache__/
 llm/__pycache__/
 tools/__pycache__/
 sandbox/__pycache__/
+.langgraph_api/
+sandbox/agent_workspace/http_responses/

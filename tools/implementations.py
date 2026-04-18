@@ -16,82 +16,103 @@ HTTP_RESPONSE_DIR = os.path.join(WORKSPACE_CONTAINER, "http_responses")
 # ------------------------------------------------------------
 
 # In tools/implementations.py
-
-
-
 def http_request(url: str, method: str = "GET", data: str = None, headers: dict = None) -> dict:
-    """Perform an HTTP request using the requests library."""
-    # Failsafe: if LLM passes None for method, default to GET
     if method is None:
         method = "GET"
     container = get_container()
     print(f"\n[Tool] http_request: {method} {url}")
 
     container.exec_run(cmd=["sh", "-c", f"mkdir -p {HTTP_RESPONSE_DIR}"])
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     response_file = os.path.join(HTTP_RESPONSE_DIR, f"resp_{timestamp}.json")
 
-    # Install requests if not present (should be in base image)
-    container.exec_run(["pip", "install", "--quiet", "requests"])
-
+    # Combined script: try requests first, fallback to curl
+    # Saves ONLY the response body to the file, prints metadata as JSON
     script = f"""
 import json
-import requests
+import subprocess
+import sys
 
 url = {json.dumps(url)}
 method = {json.dumps(method)}
 data = {repr(data)}
 headers = {repr(headers) if headers else 'None'}
 
-try:
+def fetch_with_requests():
+    import requests
     if method == 'GET':
-        response = requests.get(url, headers=headers, verify=False, timeout=30)
-    else: # POST
-        response = requests.post(url, headers=headers, data=data, verify=False, timeout=30)
-    
-    # Attempt to parse JSON, fall back to text if it fails
+        resp = requests.get(url, headers=headers, verify=False, timeout=30)
+    else:
+        resp = requests.post(url, headers=headers, data=data, verify=False, timeout=30)
+    # Try to parse JSON, fallback to text
     try:
-        body = response.json()
-    except json.JSONDecodeError:
-        body = response.text
-        
-    output = {{"status": response.status_code, "headers": dict(response.headers), "body": body}}
+        body = resp.json()
+    except:
+        body = resp.text
+    # Save ONLY the body to file
     with open("{response_file}", "w") as f:
-        json.dump(output, f)
-    print(json.dumps(output))
+        if isinstance(body, (dict, list)):
+            json.dump(body, f)
+        else:
+            f.write(str(body))
+    return {{"status": resp.status_code, "body": body}}
+
+def fetch_with_curl():
+    curl_cmd = ["curl", "-s", "-k", "-X", method, url]
+    if method == "POST" and data is not None:
+        curl_cmd.extend(["-d", str(data)])
+    result = subprocess.run(curl_cmd, capture_output=True, text=True, timeout=30)
+    body = result.stdout
+    try:
+        body = json.loads(body)
+    except:
+        pass
+    # Save ONLY the body to file
+    with open("{response_file}", "w") as f:
+        if isinstance(body, (dict, list)):
+            json.dump(body, f)
+        else:
+            f.write(str(body))
+    return {{"status": 200 if result.returncode == 0 else 500, "body": body}}
+
+try:
+    output = fetch_with_requests()
 except Exception as e:
-    print(json.dumps({{"error": str(e)}}))
+    try:
+        output = fetch_with_curl()
+    except Exception as e2:
+        output = {{"error": f"Both requests and curl failed: {{e}} | {{e2}}"}}
+
+print(json.dumps(output))
 """
-    # ... (rest of the function to write and execute the script) ...
     safe_script = script.replace("'", "'\\''")
     write_cmd = f"printf '%s' '{safe_script}' > /tmp/http_req.py"
     container.exec_run(cmd=["sh", "-c", write_cmd])
-
     result = container.exec_run(cmd=["python", "/tmp/http_req.py"], demux=True)
 
     stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
     stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
-
-    print(f"[Tool] HTTP stdout preview: {stdout[:200]}...")
-    if stderr:
-        print(f"[Tool] HTTP stderr: {stderr[:200]}...")
 
     try:
         parsed = json.loads(stdout) if stdout else {"error": "No output", "stderr": stderr}
     except json.JSONDecodeError:
         parsed = {"error": "Failed to parse JSON", "raw_stdout": stdout, "stderr": stderr}
 
-    if "body" in parsed and len(parsed.get("body", "")) > 2000:
-        body_preview = parsed["body"][:500] + "... [truncated]"
-        return {
-            "status": parsed.get("status"),
-            "headers": parsed.get("headers"),
-            "body_preview": body_preview,
-            "full_response_file": response_file,
-            "note": f"Response body too large ({len(parsed['body'])} chars). Full response saved to {response_file}. Use grep_file or read_file_range to explore it."
-        }
+    # If the response body is large, return a preview instead of the full body
+    body = parsed.get("body")
+    if body is not None:
+        body_str = json.dumps(body) if isinstance(body, (dict, list)) else str(body)
+        if len(body_str) > 2000:
+            body_preview = body_str[:500] + "... [truncated]"
+            return {
+                "status": parsed.get("status"),
+                "body_preview": body_preview,
+                "full_response_file": response_file,
+                "note": f"Full response saved to {response_file}"
+            }
     return parsed
+
+
 
 
 def web_search(query: str, max_results: int = 5) -> dict:

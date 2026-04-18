@@ -1,6 +1,6 @@
 """
 harness.py — LangGraph-powered agent with checkpointing and LangSmith.
-Clean terminal UI using Rich.
+Clean terminal UI using Rich. Supports Plan → Approval → Execute → Reflect flow.
 """
 
 import os
@@ -8,6 +8,7 @@ import sys
 from dotenv import load_dotenv
 from langsmith import traceable
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, AIMessage
+from langgraph.types import Command
 import logging
 
 from rich.console import Console
@@ -121,7 +122,8 @@ def main():
         "step_count": 0,
         "reflection_count": 0,
         "plan": None,
-        "plan_approved": False
+        "plan_approved": False,
+        "tool_errors": []
     }
 
     while True:
@@ -137,25 +139,64 @@ def main():
             console.print("[green]Goodbye![/]")
             break
 
+        # Reset per-turn state
         state["messages"].append(HumanMessage(content=user_input))
         state["step_count"] = 0
         state["reflection_count"] = 0
+        state["plan"] = None
+        state["plan_approved"] = False
+        state["tool_errors"] = []
 
         graph, _ = get_agent_graph()
         config = {"configurable": {"thread_id": thread_id}}
 
-        # Simple "Thinking..." message – no Live wrapper to interfere with input
-        console.print("[cyan]Thinking...[/]")
+        console.print("[cyan]Agent is planning...[/]")
+
         try:
-            final_state = graph.invoke(state, config=config)
+            # Stream to handle interrupts (approval requests)
+            for event in graph.stream(state, config=config):
+                if 'interrupt' in event:
+                    interrupt_data = event['interrupt']
+                    console.print()
+                    console.print(Panel(
+                        f"[bold yellow]📋 Approval Required[/]\n\n"
+                        f"[bold]Plan:[/]\n{interrupt_data['plan']}\n\n"
+                        f"{interrupt_data['message']}",
+                        title="Awaiting Human Input",
+                        border_style="yellow"
+                    ))
+                    # Get user decision
+                    decision = console.input("[bold green]Approve / Edit / Reject? (a/e/r): [/]").strip().lower()
+                    if decision == 'a':
+                        user_feedback = {"type": "approve"}
+                    elif decision == 'e':
+                        feedback = console.input("[bold]Please provide feedback to edit the plan: [/]")
+                        user_feedback = {"type": "edit", "feedback": feedback}
+                    else:  # 'r' or anything else
+                        user_feedback = {"type": "reject"}
+
+                    # Resume graph with the user's decision
+                    final_state = graph.invoke(Command(resume=user_feedback), config=config)
+                    state = final_state
+                    break  # Exit the event loop after handling interrupt
+                else:
+                    # Normal event (no interrupt) – update state with the latest
+                    for node_name, node_output in event.items():
+                        if node_output and "messages" in node_output:
+                            state = node_output
+            else:
+                # If we didn't break (no interrupt), the stream finished normally
+                # The last event is the final state
+                pass
+
         except Exception as e:
             console.print(f"[red]Error during execution: {e}[/]")
+            import traceback
+            traceback.print_exc()
             continue
 
-        state = final_state
-        last_msg = state["messages"][-1]
-
         # Display final response
+        last_msg = state["messages"][-1] if state.get("messages") else None
         if isinstance(last_msg, AIMessage) and last_msg.content:
             console.print()
             console.print(Panel(
@@ -165,7 +206,7 @@ def main():
             ))
         else:
             # Fallback: show summary of tool results
-            summary = _extract_tool_results(state["messages"])
+            summary = _extract_tool_results(state.get("messages", []))
             console.print()
             console.print(Panel(
                 f"[yellow]The agent completed its tasks but did not produce a final message.[/]\n\n"
@@ -175,7 +216,7 @@ def main():
             ))
 
         # Optionally show step count if limit reached
-        if state.get("step_count", 0) >= 10:
+        if state.get("step_count", 0) >= 20:
             console.print("[dim]Reached maximum steps for this turn.[/]")
 
 if __name__ == "__main__":

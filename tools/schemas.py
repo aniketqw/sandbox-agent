@@ -13,6 +13,36 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "query": {"type": "string", "description": "The search query."},
+                    "max_results": {"type": "integer", "description": "Maximum number of results (default 5).", "default": 5}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_approval",
+            "description": "Request user approval before executing a plan.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_summary": {"type": "string", "description": "A clear summary of what you intend to do."},
+                    "code_to_execute": {"type": "string", "description": "Optional: the code you plan to run."}
+                },
+                "required": ["plan_summary"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web using Tavily to get up-to-date information or research a topic.",
+            "parameters": {
+                "type": "object",
+                "properties": {
                     "query": {
                         "type": "string",
                         "description": "The search query."

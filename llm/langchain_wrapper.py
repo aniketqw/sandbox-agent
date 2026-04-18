@@ -120,6 +120,15 @@ def _parse_pseudo_tool_calls(content: str) -> list:
             "args": args,
             "type": "tool_call",
         })
+    # Pattern for Claude's plain-text code blocks: "```python\n...\n```"
+    pattern6 = r"```python\s*(.*?)```"
+    for code in re.findall(pattern6, content, re.DOTALL):
+        tool_calls.append({
+            "id": f"pseudo_python_{len(tool_calls)}",
+            "name": "execute_python",
+            "args": {"code": code.strip()},
+            "type": "tool_call",
+        })
 
     
 

@@ -1,4 +1,3 @@
-# tools/dispatch.py
 from tools.implementations import (
     run_shell_command,
     execute_python,
@@ -12,6 +11,7 @@ from tools.implementations import (
     list_files,
     ask_human,
     web_search,
+    request_approval,
 )
 
 TOOL_DISPATCH = {
@@ -27,4 +27,5 @@ TOOL_DISPATCH = {
     "list_files": list_files,
     "ask_human": ask_human,
     "web_search": web_search,
+    "request_approval": request_approval,
 }

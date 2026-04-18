@@ -1,6 +1,5 @@
 """
-tool/implementations.py — Functions the agent can call to interact with the sandbox.
-Each function maps 1-to-1 with a JSON schema defined in schemas.py.
+tools/implementations.py — Functions the agent can call to interact with the sandbox.
 """
 
 import os
@@ -8,77 +7,24 @@ import json
 from datetime import datetime
 from sandbox.container import get_container, WORKSPACE_CONTAINER
 from tavily import TavilyClient
+
 TEMP_SCRIPT = os.path.join(WORKSPACE_CONTAINER, "agent_temp.py")
 HTTP_RESPONSE_DIR = os.path.join(WORKSPACE_CONTAINER, "http_responses")
 
-def ask_human(question: str) -> dict:
-    """Ask the human user a question and wait for a response."""
-    print(f"\n[Agent needs your input] {question}")
-    response = input("Your answer: ").strip()
-    return {"answer": response}
-def request_approval(plan_summary: str, code_to_execute: str = "") -> dict:
-    """
-    Ask the human to approve a plan before execution.
-    Returns {'approved': True/False, 'feedback': '...'}
-    """
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.syntax import Syntax
-    console = Console()
-
-    console.print()
-    console.print(Panel(
-        f"[bold yellow]📋 Agent wants to execute the following plan:[/]\n\n{plan_summary}",
-        title="Approval Request",
-        border_style="yellow"
-    ))
-    if code_to_execute:
-        console.print(Panel(
-            Syntax(code_to_execute, "python", theme="monokai", line_numbers=True),
-            title="Code to execute",
-            border_style="yellow"
-        ))
-
-    answer = console.input("[bold green]Approve? (y/n): [/]").strip().lower()
-    if answer in ("y", "yes"):
-        feedback = console.input("[bold]Optional feedback: [/]") or "Approved."
-        return {"approved": True, "feedback": feedback}
-    else:
-        feedback = console.input("[bold]What should be changed? [/]") or "Not approved."
-        return {"approved": False, "feedback": feedback}
-
-
-def web_search(query: str, max_results: int = 5) -> dict:
-    """
-    Perform a web search using Tavily API.
-    Returns a list of relevant results with titles, URLs, and snippets.
-    """
-    api_key = os.getenv("TAVILY_API_KEY")
-    if not api_key:
-        return {"error": "TAVILY_API_KEY not set in environment."}
-    
-    try:
-        client = TavilyClient(api_key=api_key)
-        response = client.search(query, max_results=max_results)
-        # Extract relevant fields for the agent
-        results = []
-        for r in response.get("results", []):
-            results.append({
-                "title": r.get("title"),
-                "url": r.get("url"),
-                "content": r.get("content"),
-                "score": r.get("score")
-            })
-        return {"query": query, "results": results, "count": len(results)}
-    except Exception as e:
-        return {"error": str(e)}
-
+# ------------------------------------------------------------
+# Core Tools
+# ------------------------------------------------------------
 
 def http_request(url: str, method: str = "GET", data: str = None, headers: dict = None) -> dict:
+    # Failsafe: if LLM passes None for method, default to GET
     if method is None:
         method = "GET"
     container = get_container()
     print(f"\n[Tool] http_request: {method} {url}")
+
+    # Ensure CA certificates are installed
+    container.exec_run(["apt-get", "update"], demux=True)
+    container.exec_run(["apt-get", "install", "-y", "ca-certificates"], demux=True)
 
     container.exec_run(cmd=["sh", "-c", f"mkdir -p {HTTP_RESPONSE_DIR}"])
 
@@ -88,33 +34,45 @@ def http_request(url: str, method: str = "GET", data: str = None, headers: dict 
     data_repr = repr(data)
     headers_repr = repr(headers)
 
+    # Script with retry logic and SSL context
     script = f"""
 import urllib.request
 import json
+import ssl
+import time
 
 url = {json.dumps(url)}
 method = {json.dumps(method)}
 data = {data_repr}
 headers = {headers_repr}
 
-req = urllib.request.Request(url, method=method)
-if headers is not None:
-    for k, v in headers.items():
-        req.add_header(k, v)
-if data is not None and method == "POST":
-    req.data = data.encode('utf-8')
+# Create unverified SSL context (bypass certificate validation for problematic endpoints)
+ssl_context = ssl._create_unverified_context()
 
-try:
-    with urllib.request.urlopen(req) as response:
-        status = response.status
-        resp_headers = dict(response.headers)
-        body = response.read().decode('utf-8', errors='replace')
-        output = {{"status": status, "headers": resp_headers, "body": body}}
-        with open("{response_file}", "w") as f:
-            json.dump(output, f)
-        print(json.dumps(output))
-except Exception as e:
-    print(json.dumps({{"error": str(e)}}))
+max_retries = 3
+for attempt in range(max_retries):
+    try:
+        req = urllib.request.Request(url, method=method)
+        if headers is not None:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        if data is not None and method == "POST":
+            req.data = data.encode('utf-8')
+        
+        with urllib.request.urlopen(req, context=ssl_context, timeout=30) as response:
+            status = response.status
+            resp_headers = dict(response.headers)
+            body = response.read().decode('utf-8', errors='replace')
+            output = {{"status": status, "headers": resp_headers, "body": body}}
+            with open("{response_file}", "w") as f:
+                json.dump(output, f)
+            print(json.dumps(output))
+            break
+    except Exception as e:
+        if attempt == max_retries - 1:
+            print(json.dumps({{"error": str(e)}}))
+        else:
+            time.sleep(1)
 """
     safe_script = script.replace("'", "'\\''")
     write_cmd = f"printf '%s' '{safe_script}' > /tmp/http_req.py"
@@ -145,237 +103,178 @@ except Exception as e:
         }
     return parsed
 
-def install_python_package(packages: list) -> dict:
-    """
-    Install one or more pip packages inside the sandbox.
-    """
-    container = get_container()
-    pkgs = " ".join(packages)
-    print(f"\n[Tool] install_python_package: {pkgs}")
 
-    cmd = f"pip install --quiet {pkgs}"
-    result = container.exec_run(cmd=["sh", "-c", cmd], demux=True)
-
-    stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
-    stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
-    success = result.exit_code == 0
-
-    # Quick verification
-    verify_cmd = f"python -c 'import {packages[0]}' 2>/dev/null && echo 'OK' || echo 'FAIL'"
-    verify_result = container.exec_run(cmd=["sh", "-c", verify_cmd])
-    verified = verify_result.output.decode().strip() == "OK"
-
-    return {
-        "success": success,
-        "verified": verified,
-        "stdout": stdout,
-        "stderr": stderr,
-        "packages": packages,
-    }
+def web_search(query: str, max_results: int = 5) -> dict:
+    api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key:
+        return {"error": "TAVILY_API_KEY not set in environment."}
+    try:
+        client = TavilyClient(api_key=api_key)
+        response = client.search(query, max_results=max_results)
+        results = []
+        for r in response.get("results", []):
+            results.append({
+                "title": r.get("title"),
+                "url": r.get("url"),
+                "content": r.get("content"),
+                "score": r.get("score")
+            })
+        return {"query": query, "results": results, "count": len(results)}
+    except Exception as e:
+        return {"error": str(e)}
 
 
-def run_playwright_script(script: str) -> dict:
-    """
-    Run a Playwright automation script inside the sandbox.
-    Assumes Playwright and Chromium are pre-installed.
-    """
-    container = get_container()
-    print(f"\n[Tool] run_playwright_script (length={len(script)})")
+def ask_human(question: str) -> dict:
+    from rich.console import Console
+    from rich.panel import Panel
+    console = Console()
+    console.print(Panel(f"[bold yellow]🤔 {question}[/]", title="Agent needs your input", border_style="yellow"))
+    response = console.input("[bold green]Your answer: [/]")
+    return {"answer": response}
 
-    temp_script = "/tmp/playwright_script.py"
-    write_cmd = f"cat > {temp_script} << 'PYEOF'\n{script}\nPYEOF"
-    container.exec_run(cmd=["sh", "-c", write_cmd])
 
-    result = container.exec_run(
-        cmd=["python", temp_script],
-        workdir=WORKSPACE_CONTAINER,
-        demux=True,
-    )
+def request_approval(plan_summary: str, code_to_execute: str = "") -> dict:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.syntax import Syntax
+    console = Console()
+    console.print()
+    console.print(Panel(
+        f"[bold yellow]📋 Agent wants to execute:[/]\n\n{plan_summary}",
+        title="Approval Request",
+        border_style="yellow"
+    ))
+    if code_to_execute:
+        console.print(Panel(
+            Syntax(code_to_execute, "python", theme="monokai", line_numbers=True),
+            title="Code to execute",
+            border_style="yellow"
+        ))
+    answer = console.input("[bold green]Approve? (y/n): [/]").strip().lower()
+    if answer in ("y", "yes"):
+        feedback = console.input("[bold]Optional feedback: [/]") or "Approved."
+        return {"approved": True, "feedback": feedback}
+    else:
+        feedback = console.input("[bold]What should be changed? [/]") or "Not approved."
+        return {"approved": False, "feedback": feedback}
 
-    stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
-    stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
-    exit_code = result.exit_code
 
-    print(f"[Tool] Playwright exit code: {exit_code}")
-    if stdout:
-        print(f"[Tool] Playwright stdout:\n{stdout}")
-    if stderr:
-        print(f"[Tool] Playwright stderr:\n{stderr}")
-
-    return {
-        "stdout": stdout,
-        "stderr": stderr,
-        "exit_code": exit_code,
-    }
-
+# ------------------------------------------------------------
+# Other Tools (unchanged)
+# ------------------------------------------------------------
 
 def run_shell_command(command: str) -> dict:
-    """
-    Execute a shell command inside the sandbox container.
-    """
     container = get_container()
     print(f"\n[Tool] run_shell_command: {command}")
-
-    result = container.exec_run(
-        cmd=["sh", "-c", command],
-        workdir=WORKSPACE_CONTAINER,
-        demux=True,
-    )
-
+    result = container.exec_run(cmd=["sh", "-c", command], workdir=WORKSPACE_CONTAINER, demux=True)
     stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
     stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
     exit_code = result.exit_code
-
     print(f"[Tool] Exit code: {exit_code}")
-    if stdout:
-        print(f"[Tool] stdout:\n{stdout}")
-    if stderr:
-        print(f"[Tool] stderr:\n{stderr}")
-
-    return {
-        "stdout": stdout,
-        "stderr": stderr,
-        "exit_code": exit_code,
-    }
+    return {"stdout": stdout, "stderr": stderr, "exit_code": exit_code}
 
 
 def execute_python(code: str) -> dict:
-    """
-    Write Python code to a temp file inside the sandbox and execute it.
-    """
     container = get_container()
     print(f"\n[Tool] execute_python:\n{code}\n")
-
-    # Escape single quotes for the heredoc
     escaped = code.replace("'", "'\\''")
     write_cmd = f"cat > {TEMP_SCRIPT} << 'PYEOF'\n{code}\nPYEOF"
     container.exec_run(cmd=["sh", "-c", write_cmd])
-
-    result = container.exec_run(
-        cmd=["python", TEMP_SCRIPT],
-        workdir=WORKSPACE_CONTAINER,
-        demux=True,
-    )
-
+    result = container.exec_run(cmd=["python", TEMP_SCRIPT], workdir=WORKSPACE_CONTAINER, demux=True)
     stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
     stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
     exit_code = result.exit_code
-
     print(f"[Tool] Exit code: {exit_code}")
-    if stdout:
-        print(f"[Tool] stdout:\n{stdout}")
-    if stderr:
-        print(f"[Tool] stderr:\n{stderr}")
-
-    return {
-        "stdout": stdout,
-        "stderr": stderr,
-        "exit_code": exit_code,
-    }
+    return {"stdout": stdout, "stderr": stderr, "exit_code": exit_code}
 
 
 def write_file(filename: str, content: str) -> dict:
-    """
-    Write a file to the /workspace directory inside the sandbox.
-    """
     container = get_container()
     filepath = os.path.join(WORKSPACE_CONTAINER, filename)
     print(f"\n[Tool] write_file: {filepath}")
-
-    # Use printf to safely handle special characters
     safe_content = content.replace("'", "'\\''")
     write_cmd = f"printf '%s' '{safe_content}' > {filepath}"
     result = container.exec_run(cmd=["sh", "-c", write_cmd])
-
     success = result.exit_code == 0
-    return {
-        "success": success,
-        "path": filepath,
-        "message": f"File written to {filepath}" if success else "Write failed",
-    }
+    return {"success": success, "path": filepath, "message": f"File written to {filepath}" if success else "Write failed"}
 
 
 def read_file(filename: str) -> dict:
-    """
-    Read a file from the /workspace directory inside the sandbox.
-    """
     container = get_container()
     filepath = os.path.join(WORKSPACE_CONTAINER, filename)
     print(f"\n[Tool] read_file: {filepath}")
-
-    result = container.exec_run(
-        cmd=["cat", filepath],
-        demux=True,
-    )
-
+    result = container.exec_run(cmd=["cat", filepath], demux=True)
     if result.exit_code != 0:
         stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else "Unknown error"
         return {"error": stderr}
-
     content = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
     return {"content": content}
 
 
-def grep_file(filepath: str, pattern: str, max_lines: int = 50) -> dict:
-    """
-    Search for lines matching a regex pattern in a file.
-    Returns matching lines with line numbers.
-    """
+def install_python_package(packages: list) -> dict:
     container = get_container()
-    print(f"\n[Tool] grep_file: '{pattern}' in {filepath}")
-
-    cmd = f"grep -n -E '{pattern}' {filepath} | head -n {max_lines}"
+    pkgs = " ".join(packages)
+    print(f"\n[Tool] install_python_package: {pkgs}")
+    cmd = f"pip install --quiet {pkgs}"
     result = container.exec_run(cmd=["sh", "-c", cmd], demux=True)
-
     stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
     stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
+    success = result.exit_code == 0
+    verify_cmd = f"python -c 'import {packages[0]}' 2>/dev/null && echo 'OK' || echo 'FAIL'"
+    verify_result = container.exec_run(cmd=["sh", "-c", verify_cmd])
+    verified = verify_result.output.decode().strip() == "OK"
+    return {"success": success, "verified": verified, "stdout": stdout, "stderr": stderr, "packages": packages}
 
+
+def run_playwright_script(script: str) -> dict:
+    container = get_container()
+    print(f"\n[Tool] run_playwright_script (length={len(script)})")
+    temp_script = "/tmp/playwright_script.py"
+    write_cmd = f"cat > {temp_script} << 'PYEOF'\n{script}\nPYEOF"
+    container.exec_run(cmd=["sh", "-c", write_cmd])
+    result = container.exec_run(cmd=["python", temp_script], workdir=WORKSPACE_CONTAINER, demux=True)
+    stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
+    stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
+    exit_code = result.exit_code
+    print(f"[Tool] Playwright exit code: {exit_code}")
+    return {"stdout": stdout, "stderr": stderr, "exit_code": exit_code}
+
+
+def grep_file(filepath: str, pattern: str, max_lines: int = 50) -> dict:
+    container = get_container()
+    print(f"\n[Tool] grep_file: '{pattern}' in {filepath}")
+    cmd = f"grep -n -E '{pattern}' {filepath} | head -n {max_lines}"
+    result = container.exec_run(cmd=["sh", "-c", cmd], demux=True)
+    stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
+    stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
     if result.exit_code == 1 and not stdout:
         return {"matches": [], "message": "No matches found."}
     elif result.exit_code != 0:
         return {"error": stderr or "grep command failed"}
-
     matches = stdout.strip().split("\n") if stdout.strip() else []
     return {"matches": matches, "count": len(matches)}
 
 
 def read_file_range(filepath: str, start_line: int = 1, end_line: int = 100) -> dict:
-    """
-    Read a specific range of lines from a file.
-    """
     container = get_container()
     print(f"\n[Tool] read_file_range: {filepath} lines {start_line}-{end_line}")
-
     cmd = f"sed -n '{start_line},{end_line}p' {filepath}"
     result = container.exec_run(cmd=["sh", "-c", cmd], demux=True)
-
     stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
     stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
-
     if result.exit_code != 0:
         return {"error": stderr or "Failed to read file"}
-
     return {"content": stdout, "start_line": start_line, "end_line": end_line}
 
 
 def list_files(directory: str = WORKSPACE_CONTAINER) -> dict:
-    """
-    List files and directories in a given path inside the sandbox.
-    """
     container = get_container()
     print(f"\n[Tool] list_files: {directory}")
-
     cmd = f"ls -la {directory}"
     result = container.exec_run(cmd=["sh", "-c", cmd], demux=True)
-
     stdout = result.output[0].decode("utf-8", errors="replace") if result.output[0] else ""
     stderr = result.output[1].decode("utf-8", errors="replace") if result.output[1] else ""
-
-    return {
-        "stdout": stdout,
-        "stderr": stderr,
-        "exit_code": result.exit_code
-    }
+    return {"stdout": stdout, "stderr": stderr, "exit_code": result.exit_code}
 
 
 # Dispatch table
@@ -391,6 +290,6 @@ TOOL_DISPATCH = {
     "read_file_range": read_file_range,
     "list_files": list_files,
     "ask_human": ask_human,
+    "web_search": web_search,
     "request_approval": request_approval,
-    "web_search":web_search,
 }

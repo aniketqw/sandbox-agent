@@ -62,15 +62,20 @@ class AnthropicProxyClient:
                         })
 
                 anthropic_tools = None
+                # Inside create() method, when building anthropic_tools:
                 if tools:
                     anthropic_tools = []
                     for t in tools:
                         if t.get("type") == "function":
                             func = t["function"]
+                            # Ensure parameters have type: object
+                            params = func.get("parameters", {"type": "object", "properties": {}})
+                            if "type" not in params:
+                                params["type"] = "object"
                             anthropic_tools.append({
                                 "name": func["name"],
                                 "description": func.get("description", ""),
-                                "input_schema": func.get("parameters", {"type": "object", "properties": {}})
+                                "input_schema": params
                             })
 
                 payload = {

@@ -1,5 +1,6 @@
 # agent/graph.py
 import os
+import json as _json
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
@@ -18,7 +19,28 @@ _checkpointer = None
 
 
 def _has_error(content: str) -> bool:
-    error_markers = ["Error", "error", "Traceback", "NameError", "TypeError", "undefined", "CancelledError"]
+    # Check for explicit {"success": false} JSON response first
+    try:
+        parsed = _json.loads(content)
+        if isinstance(parsed, dict) and parsed.get("success") is False:
+            return True
+    except (_json.JSONDecodeError, TypeError):
+        pass
+    # Fall back to specific exception class names only (avoids false positives on "error" substring)
+    error_markers = [
+        "Traceback",
+        "NameError",
+        "TypeError",
+        "ValueError",
+        "AttributeError",
+        "ImportError",
+        "SyntaxError",
+        "IndexError",
+        "KeyError",
+        "RuntimeError",
+        "CancelledError",
+        "Exception:",
+    ]
     return any(marker in content for marker in error_markers)
 
 
@@ -44,6 +66,8 @@ def get_agent_graph():
 
     def reflect_node(state: AgentState):
         messages = state["messages"]
+
+        # Find the last ToolMessage to extract error detail
         last_tool_msg = None
         for msg in reversed(messages):
             if isinstance(msg, ToolMessage):
@@ -51,20 +75,53 @@ def get_agent_graph():
                 break
 
         error_detail = last_tool_msg.content if last_tool_msg else "Unknown error"
+        error_snippet = error_detail[:600]
+
+        # Detect whether this looks like a tool/code bug vs a wrong-argument mistake
+        tool_bug_markers = [
+            "Traceback",
+            "NameError",
+            "TypeError",
+            "ValueError",
+            "AttributeError",
+            "ImportError",
+            "SyntaxError",
+            "IndexError",
+            "KeyError",
+            "RuntimeError",
+        ]
+        is_tool_bug = any(marker in error_detail for marker in tool_bug_markers)
+
+        if is_tool_bug:
+            guidance = (
+                "This looks like a CODE or TOOL BUG. Please:\n"
+                "1. Read the full traceback carefully.\n"
+                "2. Fix the Python code before retrying (check variable names, imports, and logic).\n"
+                "3. Do NOT repeat the same code unchanged.\n"
+                "4. If the bug is inside an imported helper, work around it inline.\n"
+            )
+        else:
+            guidance = (
+                "This looks like a WRONG ARGUMENT or MISSING DATA issue. Please:\n"
+                "1. Use the exact file path returned by a prior tool call (e.g. http_request).\n"
+                "2. Do NOT reference variables that were never defined.\n"
+                "3. Save data to a file first, then read it back before processing.\n"
+                "4. Ensure the 'code' argument to execute_python is a complete, valid Python script.\n"
+            )
+
         correction_prompt = HumanMessage(content=(
-            f"[REFLECTION] The previous tool call failed with:\n{error_detail[:500]}\n\n"
-            "Please analyze the error and provide a CORRECTED tool call. "
-            "Common fixes:\n"
-            "- Use the exact file path returned by http_request.\n"
-            "- Do NOT reference undefined variables.\n"
-            "- Save data to a file first, then read it back.\n"
-            "- For execute_python, ensure the 'code' argument is a valid Python script."
+            f"[REFLECTION – attempt {state.get('retry_count', 0) + 1}/{MAX_RETRIES}] "
+            f"The previous tool call failed with:\n{error_snippet}\n\n"
+            f"{guidance}"
+            "Provide a CORRECTED tool call now."
         ))
+
         response = llm_with_tools.invoke(messages + [correction_prompt])
         return {
-            "messages": [response],
+            "messages": [correction_prompt, response],
             "step_count": state.get("step_count", 0) + 1,
             "retry_count": state.get("retry_count", 0) + 1,
+            "correction_prompt": correction_prompt.content,
         }
 
     workflow = StateGraph(AgentState)

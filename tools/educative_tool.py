@@ -392,7 +392,7 @@ def open_educative_course(url: str) -> dict:
     script_body = _BROWSER_SCRIPT_TEMPLATE.format(
         url=json.dumps(url),
         output_file=json.dumps(output_file),
-        cookies=json.dumps(pw_cookies),
+        cookies=repr(pw_cookies),
     )
 
     with tempfile.NamedTemporaryFile(

@@ -70,11 +70,18 @@ harness.py      Main entry point — Rich REPL
 | `SANDBOX_PERSISTENT` | `true` keeps the Docker container alive between runs |
 
 ## Key behaviours
-- The agent graph has a max of 15 steps and 3 error retries (reflection node).
+- The agent graph has a max of 15 steps and 3 error retries via the **improved reflect_node**.
 - In LangGraph Studio, all tools degrade gracefully to mock responses (no Docker, no browser).
 - Tools that run code (shell, Python, Playwright) execute inside the container, not on the host.
 - `open_educative_course` is the exception — it launches Chrome **on the host** (headful).
 - Courses scraped by `open_educative_course` are saved to `agent_workspace/educative_courses/`.
+
+## Error handling & reflection
+When a tool fails, the **reflect_node** analyzes the error and decides strategy:
+- **Code/tool bug detected** (Traceback, NameError, ImportError): guides LLM to fix the code
+- **Wrong argument/missing data**: guides LLM to use correct file paths and valid inputs
+- **Structured failure** (`"success": false` in JSON): marks it as a tool-implementation issue
+- Persists correction prompt in history so future turns understand what was corrected
 
 ## Playwright setup (host vs Docker)
 - **Docker container**: Playwright is pre-installed in `Dockerfile.sandbox`. Used by `run_playwright_script` (headless).

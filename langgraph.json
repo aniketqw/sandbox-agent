@@ -5,6 +5,7 @@
   "env": ".env",
   "python_version": "3.11",
   "dependencies": [
+    ".",
     "langgraph>=0.2.0",
     "langchain>=0.3.0",
     "langchain-core>=0.3.0",
@@ -20,17 +21,7 @@
   ],
   "docker": {
     "volumes": [
-      "/Users/aniketsaxena/.docker/run/docker.sock:/var/run/docker.sock"
+      "/var/run/docker.sock:/var/run/docker.sock"
     ]
-  },
-  "services": {
-    "sandbox": {
-      "image": "sandbox-agent:latest",
-      "command": "tail -f /dev/null",
-      "volumes": [
-        "../agent_workspace:/workspace"
-      ],
-      "working_dir": "/workspace"
-    }
   }
 }

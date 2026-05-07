@@ -13,6 +13,11 @@ from tools.implementations import (
     web_search,
     request_approval,
 )
+from tools.educative_tool import (
+    open_educative_course,
+    load_educative_course,
+    list_educative_courses,
+)
 
 TOOL_DISPATCH = {
     "run_shell_command": run_shell_command,
@@ -28,4 +33,7 @@ TOOL_DISPATCH = {
     "ask_human": ask_human,
     "web_search": web_search,
     "request_approval": request_approval,
+    "open_educative_course": open_educative_course,
+    "load_educative_course": load_educative_course,
+    "list_educative_courses": list_educative_courses,
 }

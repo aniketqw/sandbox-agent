@@ -345,4 +345,67 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_educative_course",
+            "description": (
+                "Open Chrome (headful, visible) with the user's Educative.io account already logged in, "
+                "navigate to a course URL, scrape the full course structure (title, lessons, modules), "
+                "save it to /workspace/educative_courses/, and return a summary. "
+                "The browser stays open so the user can follow along. "
+                "Use this first before working with any educative.io course content."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": (
+                            "Full URL of the educative.io course or lesson to open, "
+                            "e.g. https://www.educative.io/courses/langgraph-from-langchain-user-to-agent-builder/why-langgraph-exists"
+                        )
+                    }
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_educative_course",
+            "description": (
+                "Load a previously scraped educative.io course from the workspace. "
+                "Returns the full course data including all lessons. "
+                "Use list_educative_courses first to see what is available."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "The JSON filename returned by list_educative_courses, e.g. 'courses_langgraph_why-langgraph-exists.json'"
+                    }
+                },
+                "required": ["filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_educative_courses",
+            "description": (
+                "List all educative.io courses that have been saved to the workspace. "
+                "Returns course titles, URLs, and lesson counts. "
+                "Use this to see which courses are available before loading one."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
 ]

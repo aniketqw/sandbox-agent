@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "sandbox-exec": {
+      "command": "python",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "/absolute/path/to/sandbox-agent",
+      "timeout": 600000,
+      "env": {
+        "SANDBOX_MCP_CALLER": "claude-code",
+        "LANGSMITH_API_KEY": "${LANGSMITH_API_KEY}",
+        "LANGSMITH_TRACING": "true",
+        "LANGSMITH_PROJECT": "sandbox-agent"
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "sandbox-exec",
+  "description": "Observable, policy-gated code execution in your own persistent Docker container, exposed to Claude Code via MCP with LangSmith tracing and a local audit trail.",
+  "version": "0.1.0",
+  "skills": ["./.claude/skills/sandbox-exec"],
+  "mcpServers": {
+    "sandbox-exec": {
+      "command": "python",
+      "args": ["-m", "mcp_server.server"],
+      "env": {
+        "SANDBOX_MCP_CALLER": "claude-code"
+      }
+    }
+  }
+}

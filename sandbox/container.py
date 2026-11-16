@@ -17,16 +17,51 @@ def _in_studio() -> bool:
 def _get_container_name():
     return "sandbox" if _in_studio() else "sandbox_agent_env"
 
+_CANDIDATE_SOCKETS = [
+    os.path.expanduser("~/.docker/run/docker.sock"),  # Docker Desktop (macOS/Windows)
+    "/var/run/docker.sock",                           # Linux / Docker Desktop (Linux)
+    os.path.expanduser("~/.colima/default/docker.sock"),  # Colima
+    os.path.expanduser("~/.rd/docker.sock"),          # Rancher Desktop
+]
+
 _client = None
 def _get_docker_client():
+    """Resolve a Docker client without hardcoding a host-specific socket path.
+
+    Resolution order: DOCKER_HOST env var -> docker.from_env() -> first
+    reachable candidate socket for common Docker runtimes.
+    """
     global _client
     if _client is None:
         if _in_studio():
             # In Studio, we don't create a real client.
             return None
+
+        if os.getenv("DOCKER_HOST"):
+            _client = docker.DockerClient.from_env()
         else:
-            socket_path = "/Users/aniketsaxena/.docker/run/docker.sock"
-            _client = docker.DockerClient(base_url=f"unix://{socket_path}")
+            try:
+                client = docker.from_env()
+                client.ping()
+                _client = client
+            except Exception:
+                _client = None
+                for socket_path in _CANDIDATE_SOCKETS:
+                    if not os.path.exists(socket_path):
+                        continue
+                    try:
+                        candidate = docker.DockerClient(base_url=f"unix://{socket_path}")
+                        candidate.ping()
+                        _client = candidate
+                        break
+                    except Exception:
+                        continue
+                if _client is None:
+                    raise RuntimeError(
+                        "Could not connect to Docker. Set DOCKER_HOST, or ensure Docker "
+                        "Desktop/Colima/Rancher Desktop is running with a socket at one of: "
+                        + ", ".join(_CANDIDATE_SOCKETS)
+                    )
     return _client
 
 CONTAINER_NAME = _get_container_name()

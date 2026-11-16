@@ -5,6 +5,7 @@ from langchain_core.tools import StructuredTool
 
 from tools.dispatch import TOOL_DISPATCH
 from tools.schemas import TOOLS
+from core.executor import execute_tool
 
 
 def _create_args_schema_from_openai(tool_def: dict) -> Type[BaseModel]:
@@ -73,19 +74,27 @@ def _get_tool_schema(tool: StructuredTool) -> dict:
     return {"type": "object", "properties": {}}
 
 
+def _make_runner(name: str):
+    """Bind `name` so each tool calls execute_tool() instead of its raw
+    function directly — this is what lets the local agent's tool traffic
+    share the same audit/trace/policy instrumentation as the MCP server."""
+    def _run(**kwargs):
+        return execute_tool(name, kwargs, caller="local-agent")
+    return _run
+
+
 LANGCHAIN_TOOLS = []
 for tool_def in TOOLS:
     func_name = tool_def["function"]["name"]
     if func_name not in TOOL_DISPATCH:
         continue
-    func = TOOL_DISPATCH[func_name]
     description = tool_def["function"]["description"]
     args_schema = _create_args_schema_from_openai(tool_def)
 
     tool = StructuredTool(
         name=func_name,
         description=description,
-        func=func,
+        func=_make_runner(func_name),
         args_schema=args_schema,
     )
     LANGCHAIN_TOOLS.append(tool)

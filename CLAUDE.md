@@ -59,6 +59,12 @@ harness.py      Main entry point — Rich REPL
 2. Add the OpenAI-compatible schema to the `TOOLS` list in `tools/schemas.py`
 3. Add the mapping `"tool_name": function` to `TOOL_DISPATCH` in `tools/dispatch.py`
 4. All three lists are read automatically by `tools/__init__.py` and `tools/langchain_adapter.py`
+5. If you want it exposed to Claude Code/ChatGPT via MCP too, add a thin `@mcp.tool()` wrapper in `mcp_server/server.py` that calls `core.executor.execute_tool("tool_name", {...}, caller=CALLER)` — don't call the tool function directly; that bypasses the policy gate and audit log.
+
+## Execution core (core/)
+Both `harness.py` (local LangGraph agent) and `mcp_server/server.py` (Claude Code / ChatGPT / Codex via MCP) funnel every tool call through `core.executor.execute_tool(name, args, caller=...)`. It applies `policy.yaml` (deny/approve/allow — see `core/policy.py`) and then runs the call under `core/audit.py`, which writes a JSONL entry to `.sandbox_audit/<session>.jsonl` and emits a LangSmith span. See `README.md` for the full picture and `docs/DIFFERENTIATION.md` for how this differs from hosted sandboxes (E2B, Modal, Claude/ChatGPT's own code interpreters) and other local-Docker MCP servers.
+
+Tail a live session: `python trace_cli.py`.
 
 ## Environment variables
 | Var | Purpose |

@@ -1,0 +1,31 @@
+# policy.yaml — allow/deny/approve rules checked by core/policy.py before a
+# tool executes. First matching rule wins (top to bottom); `default` is the
+# fallback when nothing matches. `tool: "*"` matches any tool.
+#
+# `match` is a regex checked (case-insensitive) against the tool's string-ish
+# arguments (command/code/script/url/packages/filename/content).
+
+default: allow
+
+rules:
+  - tool: run_shell_command
+    match: 'rm\s+-rf\s+/(?!workspace\b)|rm\s+-rf\s+\*|:\(\)\{.*\};:|mkfs\.|dd\s+if=.*of=/dev/'
+    action: deny
+    reason: "Destructive/irreversible command blocked by policy."
+
+  - tool: run_shell_command
+    match: '\bcurl\b|\bwget\b|\bnc\b|\bssh\b|\bscp\b'
+    action: approve
+    reason: "Network-capable shell command requires approval."
+
+  - tool: install_python_package
+    action: approve
+    reason: "Installing packages requires approval."
+
+  - tool: http_request
+    action: approve
+    reason: "Outbound HTTP request requires approval."
+
+  - tool: run_playwright_script
+    action: approve
+    reason: "Browser automation requires approval."

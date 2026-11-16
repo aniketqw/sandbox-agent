@@ -1,0 +1,14 @@
+# Append to ~/.codex/config.toml (Codex CLI) to connect to the sandbox MCP
+# server over streamable HTTP. Start the server first, with caller identity
+# set as an env var on the SERVER process itself (HTTP mode is a long-lived
+# process shared by whichever client connects, so identity is set at launch,
+# not per-connector like the stdio case):
+#   SANDBOX_MCP_CALLER=codex LANGSMITH_PROJECT=sandbox-agent \
+#     python -m mcp_server.server --http --host 127.0.0.1 --port 8765
+#
+# For ChatGPT's hosted developer-mode connectors (which can't reach
+# 127.0.0.1), expose this same port through a tunnel (e.g. `ngrok http 8765`
+# or a Tailscale Funnel) and use that public HTTPS URL instead.
+
+[mcp_servers.sandbox_exec]
+url = "http://127.0.0.1:8765/mcp"
